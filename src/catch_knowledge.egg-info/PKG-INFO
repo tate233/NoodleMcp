@@ -1,0 +1,172 @@
+Metadata-Version: 2.4
+Name: catch-knowledge
+Version: 0.1.0
+Summary: Personal interview experience knowledge base pipeline.
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: apscheduler<4.0,>=3.10
+Requires-Dist: beautifulsoup4<5.0,>=4.12
+Requires-Dist: httpx<0.28,>=0.27
+Requires-Dist: openai<2.0,>=1.30
+Requires-Dist: pydantic<3.0,>=2.7
+Requires-Dist: pydantic-settings<3.0,>=2.2
+Requires-Dist: python-dateutil<3.0,>=2.9
+Requires-Dist: sqlalchemy<2.1,>=2.0
+Provides-Extra: dev
+Requires-Dist: pytest<9.0,>=8.2; extra == "dev"
+Requires-Dist: ruff<0.5,>=0.4; extra == "dev"
+Provides-Extra: playwright
+Requires-Dist: playwright<2.0,>=1.44; extra == "playwright"
+Provides-Extra: postgres
+Requires-Dist: psycopg[binary]<3.3,>=3.1; extra == "postgres"
+
+# Catch Knowledge
+
+Personal pipeline for collecting interview-style content from local data sources, structuring it with an LLM, and exporting it into a local knowledge base.
+
+## What This Scaffold Includes
+
+- Config loading from environment variables
+- SQLite-friendly SQLAlchemy models for raw posts, LLM analysis, and exported knowledge base docs
+- A daily pipeline entrypoint for source collection
+- Pluggable collectors for `xiaohongshu-mcp` and Nowcoder
+- Markdown knowledge-base exporter
+- APScheduler-based daily job runner
+
+## Project Layout
+
+```text
+src/catch_knowledge/
+  cli.py
+  config.py
+  db/
+  exporters/
+  llm/
+  pipeline/
+  sources/
+```
+
+## Quick Start
+
+1. Create a virtual environment.
+2. Install dependencies:
+
+   ```bash
+   pip install -e .
+   ```
+
+3. Copy `.env.example` to `.env` and fill in your values.
+   On Windows PowerShell:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+4. For local development, no extra database setup is needed when using SQLite.
+5. Run a single pipeline pass:
+
+   ```bash
+   catch-knowledge run-once
+   ```
+
+6. Run the scheduler:
+
+   ```bash
+   catch-knowledge schedule
+   ```
+
+## Secrets
+
+Put your API key in `.env`, for example:
+
+```env
+OPENAI_API_KEY=your-real-key-here
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+OPENAI_MODEL=deepseek-ai/DeepSeek-V3
+```
+
+The `.env` file lives at the project root:
+
+- [`.env`](e:\vibe_coding\catch_knowledge\.env)
+
+You can write it manually with any editor. Keep it local and do not commit it.
+
+Why use `.env` instead of hardcoding it in Python:
+
+- It avoids accidental leaks in source control.
+- It lets you rotate keys without editing code.
+- It keeps logs and stack traces less likely to expose secrets.
+
+## Xiaohongshu MCP
+
+The default mode now expects a local `xiaohongshu-mcp` server running at `XHS_MCP_BASE_URL`.
+
+Recommended first-run flow:
+
+1. Start `xiaohongshu-mcp`
+2. Check status:
+
+   ```bash
+   catch-knowledge xhs-mcp-status
+   ```
+
+3. If not logged in, fetch a QR code:
+
+   ```bash
+   catch-knowledge xhs-mcp-qrcode
+   ```
+
+4. Open the saved QR image and scan it with the Xiaohongshu app
+5. Run:
+
+   ```bash
+   catch-knowledge run-once
+   ```
+
+Key env vars:
+
+- `SOURCE_PLATFORM=xiaohongshu_mcp`
+- `XHS_MCP_BASE_URL=http://127.0.0.1:18060`
+- `XHS_KEYWORDS=面经,后端面试,算法面试`
+- `XHS_SEARCH_SORT_BY=最新`
+- `XHS_SEARCH_PUBLISH_TIME=一天内`
+- `XHS_MAX_RESULTS_PER_KEYWORD=10`
+
+## Playwright
+
+Install browser automation support only if we need it:
+
+```bash
+pip install -e .[playwright]
+playwright install chromium
+```
+
+Relevant env vars:
+
+- `NOWCODER_USE_PLAYWRIGHT=true`
+- `NOWCODER_BROWSER_HEADLESS=false` for manual login
+- `NOWCODER_STORAGE_STATE_PATH=./data/nowcoder_storage_state.json`
+
+If Nowcoder requires login, we can log in once with Playwright and reuse the saved storage state on later scheduled runs.
+
+Manual login flow:
+
+```bash
+catch-knowledge login-nowcoder
+```
+
+Then log in in the opened browser window and wait about 60 seconds. The session state will be saved to the path from `NOWCODER_STORAGE_STATE_PATH`.
+
+## Current Status
+
+This is a scaffold. The database flow, Markdown export, and LLM integration are implemented. The preferred local source is `xiaohongshu-mcp`, which exposes HTTP APIs we can consume. The Nowcoder collector remains available but is no longer the default path.
+
+## Deployment Notes
+
+- SQLite is the default for local bring-up.
+- You can switch to PostgreSQL later by changing `DATABASE_URL`.
+- `SOURCE_PLATFORM=xiaohongshu_mcp` is the current default.
+- `NOWCODER_SEED_URLS` accepts a comma-separated list.
+- The default schedule `0 0 * * *` runs once per day in the configured timezone.
+- Enable Playwright only when the request-based collector cannot see enough content.
+- See `docs/architecture.md` for the system breakdown.

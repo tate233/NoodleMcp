@@ -1,0 +1,2 @@
+[console_scripts]
+catch-knowledge = catch_knowledge.cli:main
