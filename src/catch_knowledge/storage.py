@@ -30,7 +30,10 @@ def upsert_raw_post(session: Session, post: CollectedPost) -> Tuple[RawPost, boo
         existing.author_name = post.author_name
         existing.published_at = post.published_at
         existing.raw_html = post.raw_html
+        existing.raw_source_text = post.raw_source_text
+        existing.raw_image_text = post.raw_image_text
         existing.raw_text = post.raw_text
+        existing.image_urls = post.image_urls
         existing.metadata_json = post.metadata_json
         existing.content_hash = content_hash
         return existing, False
@@ -43,7 +46,10 @@ def upsert_raw_post(session: Session, post: CollectedPost) -> Tuple[RawPost, boo
         author_name=post.author_name,
         published_at=post.published_at,
         raw_html=post.raw_html,
+        raw_source_text=post.raw_source_text,
+        raw_image_text=post.raw_image_text,
         raw_text=post.raw_text,
+        image_urls=post.image_urls,
         metadata_json=post.metadata_json,
         content_hash=content_hash,
         status="collected",
@@ -55,6 +61,7 @@ def upsert_raw_post(session: Session, post: CollectedPost) -> Tuple[RawPost, boo
 
 def save_analysis(session: Session, raw_post: RawPost, analysis: StructuredAnalysis, model: str) -> PostAnalysis:
     existing = session.scalar(select(PostAnalysis).where(PostAnalysis.raw_post_id == raw_post.id))
+    used_fallback = bool((analysis.normalized_json or {}).get("llm_fallback"))
     payload = dict(
         is_interview_experience=analysis.is_interview_experience,
         company=analysis.company,
@@ -62,6 +69,7 @@ def save_analysis(session: Session, raw_post: RawPost, analysis: StructuredAnaly
         job_direction=analysis.job_direction,
         interview_rounds=analysis.interview_rounds,
         tags=analysis.tags,
+        interview_questions=analysis.interview_questions,
         question_points=analysis.question_points,
         summary=analysis.summary,
         difficulty=analysis.difficulty,
@@ -71,12 +79,12 @@ def save_analysis(session: Session, raw_post: RawPost, analysis: StructuredAnaly
     if existing:
         for key, value in payload.items():
             setattr(existing, key, value)
-        raw_post.status = "processed"
+        raw_post.status = "analysis_fallback" if used_fallback else "processed"
         return existing
 
     created = PostAnalysis(raw_post_id=raw_post.id, **payload)
     session.add(created)
-    raw_post.status = "processed"
+    raw_post.status = "analysis_fallback" if used_fallback else "processed"
     session.flush()
     return created
 

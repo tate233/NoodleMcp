@@ -19,154 +19,257 @@ Provides-Extra: playwright
 Requires-Dist: playwright<2.0,>=1.44; extra == "playwright"
 Provides-Extra: postgres
 Requires-Dist: psycopg[binary]<3.3,>=3.1; extra == "postgres"
+Provides-Extra: ocr
 
 # Catch Knowledge
 
-Personal pipeline for collecting interview-style content from local data sources, structuring it with an LLM, and exporting it into a local knowledge base.
+一个面向个人使用的面经知识库工具：从内容源采集帖子，保存原始数据，调用 OCR 和大模型做结构化分析，并导出成可检索的知识库内容。
 
-## What This Scaffold Includes
+## 当前状态
 
-- Config loading from environment variables
-- SQLite-friendly SQLAlchemy models for raw posts, LLM analysis, and exported knowledge base docs
-- A daily pipeline entrypoint for source collection
-- Pluggable collectors for `xiaohongshu-mcp` and Nowcoder
-- Markdown knowledge-base exporter
-- APScheduler-based daily job runner
+当前基础链路已经打通：
 
-## Project Layout
+- 使用 `xiaohongshu-mcp` 抓取帖子
+- 原始帖子先入库
+- 保存图片链接
+- 调用火山 OCR 提取图片文字
+- 将“正文 + OCR 文本”一起交给 LLM
+- 提取面试题、考点、公司、岗位、轮次等结构化字段
+- 导出 Markdown 知识库
 
-```text
-src/catch_knowledge/
-  cli.py
-  config.py
-  db/
-  exporters/
-  llm/
-  pipeline/
-  sources/
+当前开发期默认使用 `SQLite`，正式部署目标是切换到 `PostgreSQL`。
+
+## 当前能力
+
+- 支持 `xiaohongshu-mcp` 作为内容源
+- 支持原始帖子、OCR 文本、结构化分析结果入库
+- 支持 `rerun-ocr` 补跑图片 OCR
+- 支持 `reanalyze-fallback` 补跑 LLM fallback 记录
+- 支持 `reanalyze-missing-questions` 补跑题目为空的记录
+- 支持导出 Markdown 知识库
+- 支持切换数据库到 PostgreSQL
+
+## 当前数据流
+
+1. 启动 `xiaohongshu-mcp`
+2. 用关键词搜索候选帖子
+3. 拉取帖子详情并写入 `raw_posts`
+4. 保存图片链接到数据库
+5. 下载图片并调用火山 OCR
+6. 将 OCR 文本并入 `raw_text`
+7. 调用 LLM 提取结构化信息，写入 `post_analysis`
+8. 导出到 `knowledge_base/`
+
+## 主要数据表
+
+### `raw_posts`
+
+- 原始帖子数据
+- 原帖正文 `raw_source_text`
+- OCR 文本 `raw_image_text`
+- 合并后的分析输入 `raw_text`
+- 图片链接 `image_urls`
+
+### `post_analysis`
+
+- `company`
+- `job_role`
+- `job_direction`
+- `interview_rounds`
+- `tags`
+- `interview_questions`
+- `question_points`
+- `summary`
+- `normalized_json`
+
+### `kb_documents`
+
+- 导出的 Markdown 文档路径
+
+## 常用命令
+
+### 抓取与分析
+
+```powershell
+python -m catch_knowledge.cli run-once
 ```
 
-## Quick Start
+执行一次完整流程：抓取、OCR、入库、LLM 分析、导出。
 
-1. Create a virtual environment.
-2. Install dependencies:
+### 补跑 OCR
 
-   ```bash
-   pip install -e .
-   ```
+```powershell
+python -m catch_knowledge.cli rerun-ocr
+```
 
-3. Copy `.env.example` to `.env` and fill in your values.
-   On Windows PowerShell:
+只处理“有图片链接但 `raw_image_text` 为空”的记录。
 
-   ```powershell
-   Copy-Item .env.example .env
-   ```
+### 补跑 LLM fallback
 
-4. For local development, no extra database setup is needed when using SQLite.
-5. Run a single pipeline pass:
+```powershell
+python -m catch_knowledge.cli reanalyze-fallback
+```
 
-   ```bash
-   catch-knowledge run-once
-   ```
+只处理之前因为 LLM 网络或模型问题而走 fallback 的记录。
 
-6. Run the scheduler:
+### 补跑题目为空的记录
 
-   ```bash
-   catch-knowledge schedule
-   ```
+```powershell
+python -m catch_knowledge.cli reanalyze-missing-questions
+```
 
-## Secrets
+### 检查模型连通性
 
-Put your API key in `.env`, for example:
+```powershell
+python -m catch_knowledge.cli llm-check
+```
+
+### 初始化当前数据库
+
+```powershell
+python -m catch_knowledge.cli init-db
+```
+
+### 把 SQLite 数据迁移到当前数据库
+
+```powershell
+python -m catch_knowledge.cli migrate-sqlite-to-db --sqlite-path ./data/catch_knowledge.db
+```
+
+这个命令适合你后面切到 PostgreSQL 时使用。
+
+## PostgreSQL 切换方案
+
+现在本机还没装 PostgreSQL 也没关系，项目已经先准备好了切换能力。
+
+建议顺序：
+
+1. 先在本机或服务器装 PostgreSQL
+2. 修改 `.env` 里的 `DATABASE_URL`
+3. 执行 `init-db`
+4. 如需保留旧数据，执行 `migrate-sqlite-to-db`
+
+### PostgreSQL 依赖
+
+```powershell
+pip install -e .[postgres]
+```
+
+### PostgreSQL 连接串示例
 
 ```env
-OPENAI_API_KEY=your-real-key-here
+DATABASE_URL=postgresql+psycopg://postgres:your_password@localhost:5432/catch_knowledge
+```
+
+### 切换步骤
+
+1. 安装 PostgreSQL
+2. 新建数据库，例如 `catch_knowledge`
+3. 安装 Python 驱动：
+
+```powershell
+pip install -e .[postgres]
+```
+
+4. 修改 `.env`
+5. 初始化表：
+
+```powershell
+python -m catch_knowledge.cli init-db
+```
+
+6. 如需迁移旧 SQLite 数据：
+
+```powershell
+python -m catch_knowledge.cli migrate-sqlite-to-db --sqlite-path ./data/catch_knowledge.db
+```
+
+## 火山 OCR 配置
+
+当前使用火山通用文字识别 `OCRNormal`：
+
+- Endpoint: `https://visual.volcengineapi.com`
+- Action: `OCRNormal`
+- Version: `2020-08-26`
+- Region: `cn-north-1`
+- Service: `cv`
+
+需要在 `.env` 里填写：
+
+```env
+OCR_ENABLED=true
+OCR_PROVIDER=volcengine
+OCR_DOWNLOAD_TIMEOUT_SECONDS=30
+OCR_MAX_IMAGES_PER_POST=9
+
+VOLCENGINE_OCR_AK=
+VOLCENGINE_OCR_SK=
+VOLCENGINE_OCR_ENDPOINT=https://visual.volcengineapi.com
+VOLCENGINE_OCR_REGION=cn-north-1
+VOLCENGINE_OCR_SERVICE=cv
+VOLCENGINE_OCR_MODE=default
+VOLCENGINE_OCR_FILTER_THRESH=80
+VOLCENGINE_OCR_HALF_TO_FULL=false
+```
+
+## LLM 配置
+
+```env
+OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.siliconflow.cn/v1
 OPENAI_MODEL=deepseek-ai/DeepSeek-V3
+LLM_RETRY_COUNT=2
+LLM_RETRY_BACKOFF_SECONDS=3
 ```
 
-The `.env` file lives at the project root:
+## 小红书模式
 
-- [`.env`](e:\vibe_coding\catch_knowledge\.env)
+先启动 MCP：
 
-You can write it manually with any editor. Keep it local and do not commit it.
-
-Why use `.env` instead of hardcoding it in Python:
-
-- It avoids accidental leaks in source control.
-- It lets you rotate keys without editing code.
-- It keeps logs and stack traces less likely to expose secrets.
-
-## Xiaohongshu MCP
-
-The default mode now expects a local `xiaohongshu-mcp` server running at `XHS_MCP_BASE_URL`.
-
-Recommended first-run flow:
-
-1. Start `xiaohongshu-mcp`
-2. Check status:
-
-   ```bash
-   catch-knowledge xhs-mcp-status
-   ```
-
-3. If not logged in, fetch a QR code:
-
-   ```bash
-   catch-knowledge xhs-mcp-qrcode
-   ```
-
-4. Open the saved QR image and scan it with the Xiaohongshu app
-5. Run:
-
-   ```bash
-   catch-knowledge run-once
-   ```
-
-Key env vars:
-
-- `SOURCE_PLATFORM=xiaohongshu_mcp`
-- `XHS_MCP_BASE_URL=http://127.0.0.1:18060`
-- `XHS_KEYWORDS=面经,后端面试,算法面试`
-- `XHS_SEARCH_SORT_BY=最新`
-- `XHS_SEARCH_PUBLISH_TIME=一天内`
-- `XHS_MAX_RESULTS_PER_KEYWORD=10`
-
-## Playwright
-
-Install browser automation support only if we need it:
-
-```bash
-pip install -e .[playwright]
-playwright install chromium
+```powershell
+cd E:\vibe_coding\catch_knowledge\xiaohongshu-mcp
+go run . -headless=false
 ```
 
-Relevant env vars:
+再回项目根目录：
 
-- `NOWCODER_USE_PLAYWRIGHT=true`
-- `NOWCODER_BROWSER_HEADLESS=false` for manual login
-- `NOWCODER_STORAGE_STATE_PATH=./data/nowcoder_storage_state.json`
-
-If Nowcoder requires login, we can log in once with Playwright and reuse the saved storage state on later scheduled runs.
-
-Manual login flow:
-
-```bash
-catch-knowledge login-nowcoder
+```powershell
+python -m catch_knowledge.cli xhs-mcp-status
+python -m catch_knowledge.cli xhs-search
+python -m catch_knowledge.cli run-once
 ```
 
-Then log in in the opened browser window and wait about 60 seconds. The session state will be saved to the path from `NOWCODER_STORAGE_STATE_PATH`.
+## 后续计划
 
-## Current Status
+### 1. 数据层
 
-This is a scaffold. The database flow, Markdown export, and LLM integration are implemented. The preferred local source is `xiaohongshu-mcp`, which exposes HTTP APIs we can consume. The Nowcoder collector remains available but is no longer the default path.
+- 正式切到 PostgreSQL
+- 为后续统计、高频题聚合、Web 查询接口做准备
 
-## Deployment Notes
+### 2. Web UI
 
-- SQLite is the default for local bring-up.
-- You can switch to PostgreSQL later by changing `DATABASE_URL`.
-- `SOURCE_PLATFORM=xiaohongshu_mcp` is the current default.
-- `NOWCODER_SEED_URLS` accepts a comma-separated list.
-- The default schedule `0 0 * * *` runs once per day in the configured timezone.
-- Enable Playwright only when the request-based collector cannot see enough content.
-- See `docs/architecture.md` for the system breakdown.
+- 做一个简洁黑白风格的 Web 页面
+- 风格类似知识库 / Typora 阅读页
+- 支持按公司浏览
+- 支持查看原文、OCR 文本、结构化题目、考点、摘要
+
+### 3. 知识库增强
+
+- 按公司分类
+- 按知识点聚合题目
+- 统计高频题
+- 统计算法题、场景题、项目题
+
+### 4. 服务器部署
+
+- 云服务器定时执行抓取
+- OCR 和 LLM 自动处理
+- 日志、失败重试和监控
+
+## 数据位置
+
+- SQLite 文件：
+  [catch_knowledge.db](e:\vibe_coding\catch_knowledge\data\catch_knowledge.db)
+
+- Markdown 知识库：
+  [knowledge_base](e:\vibe_coding\catch_knowledge\knowledge_base)

@@ -103,7 +103,10 @@ class NowcoderCollector(BaseCollector):
             author_name=author,
             published_at=published_at,
             raw_html=response.text,
+            raw_source_text=body,
+            raw_image_text=None,
             raw_text=body,
+            image_urls=[],
             metadata_json={"seeded": True},
         )
 
@@ -127,7 +130,10 @@ class NowcoderCollector(BaseCollector):
             author_name=author,
             published_at=published_at,
             raw_html=rendered.html,
+            raw_source_text=body,
+            raw_image_text=None,
             raw_text=body,
+            image_urls=[],
             metadata_json={"seeded": True, "used_playwright": True},
         )
 

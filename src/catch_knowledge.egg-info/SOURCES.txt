@@ -14,6 +14,7 @@ src/catch_knowledge.egg-info/requires.txt
 src/catch_knowledge.egg-info/top_level.txt
 src/catch_knowledge/db/__init__.py
 src/catch_knowledge/db/base.py
+src/catch_knowledge/db/migrate.py
 src/catch_knowledge/db/models.py
 src/catch_knowledge/db/session.py
 src/catch_knowledge/exporters/__init__.py
@@ -21,6 +22,8 @@ src/catch_knowledge/exporters/markdown.py
 src/catch_knowledge/llm/__init__.py
 src/catch_knowledge/llm/analyzer.py
 src/catch_knowledge/llm/schemas.py
+src/catch_knowledge/ocr/__init__.py
+src/catch_knowledge/ocr/volcengine.py
 src/catch_knowledge/pipeline/__init__.py
 src/catch_knowledge/pipeline/run.py
 src/catch_knowledge/sources/__init__.py

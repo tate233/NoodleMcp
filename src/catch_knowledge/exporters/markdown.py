@@ -58,12 +58,23 @@ class MarkdownExporter:
             "",
             "## 面试题",
         ]
+        interview_questions = analysis.interview_questions or []
         question_points = analysis.question_points or []
+        if interview_questions:
+            lines.extend([f"- {item}" for item in interview_questions])
+        else:
+            lines.append("- 暂无抽取到具体题目")
+
+        lines.extend(
+            [
+                "",
+                "## 考点",
+            ]
+        )
         if question_points:
             lines.extend([f"- {item}" for item in question_points])
         else:
-            lines.append("- 暂无结构化题目")
-
+            lines.append("- 暂无结构化考点")
         lines.extend(
             [
                 "",

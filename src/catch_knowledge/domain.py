@@ -14,7 +14,10 @@ class CollectedPost:
     author_name: Optional[str]
     published_at: Optional[datetime]
     raw_html: Optional[str]
+    raw_source_text: Optional[str]
+    raw_image_text: Optional[str]
     raw_text: Optional[str]
+    image_urls: List[str] = field(default_factory=list)
     metadata_json: Dict = field(default_factory=dict)
 
 
@@ -26,6 +29,7 @@ class StructuredAnalysis:
     job_direction: Optional[str]
     interview_rounds: List[str]
     tags: List[str]
+    interview_questions: List[str]
     question_points: List[str]
     summary: Optional[str]
     difficulty: Optional[str]
