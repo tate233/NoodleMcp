@@ -11,6 +11,7 @@ from catch_knowledge.db import create_session_factory, create_tables
 from catch_knowledge.db.models import PostAnalysis, RawPost
 from catch_knowledge.domain import CollectedPost
 from catch_knowledge.exporters import MarkdownExporter
+from catch_knowledge.indexing import QuestionIndexBuilder
 from catch_knowledge.llm import LLMAnalyzer
 from catch_knowledge.ocr import VolcengineOCRProcessor
 from catch_knowledge.sources import NowcoderCollector, XiaohongshuMCPCollector
@@ -191,6 +192,23 @@ def rerun_ocr_posts(settings: Settings) -> dict:
                 stats["ocr_failed"] += 1
 
     return stats
+
+
+def export_obsidian_vault(settings: Settings) -> dict:
+    create_tables(settings)
+    session_factory = create_session_factory(settings)
+    exporter = MarkdownExporter(settings)
+    with session_factory() as session:
+        return exporter.export_indexes(session)
+
+
+def build_question_index(settings: Settings) -> dict:
+    create_tables(settings)
+    session_factory = create_session_factory(settings)
+    analyzer = LLMAnalyzer(settings)
+    builder = QuestionIndexBuilder(analyzer)
+    with session_factory() as session:
+        return builder.rebuild(session)
 
 
 def _build_collector(settings: Settings):

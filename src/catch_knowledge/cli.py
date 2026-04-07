@@ -9,6 +9,8 @@ from catch_knowledge.db import create_tables, migrate_sqlite_to_current_db
 from catch_knowledge.llm import LLMAnalyzer
 from catch_knowledge.pipeline import (
     analyze_raw_posts,
+    build_question_index,
+    export_obsidian_vault,
     reanalyze_fallback_posts,
     reanalyze_missing_questions,
     rerun_ocr_posts,
@@ -33,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("reanalyze-fallback", help="Re-run LLM analysis for rows previously processed via fallback")
     subparsers.add_parser("reanalyze-missing-questions", help="Re-run LLM analysis for rows whose interview_questions column is still empty")
     subparsers.add_parser("rerun-ocr", help="Re-run OCR for rows with image URLs but empty raw_image_text")
+    subparsers.add_parser("export-obsidian", help="Export current analysis results into an Obsidian-friendly vault")
+    subparsers.add_parser("build-question-index", help="Build canonical question index with local per-topic merging")
     subparsers.add_parser("init-db", help="Initialize database tables for the current DATABASE_URL")
     migrate_parser = subparsers.add_parser("migrate-sqlite-to-db", help="Migrate data from a SQLite file into the current DATABASE_URL")
     migrate_parser.add_argument("--sqlite-path", default="./data/catch_knowledge.db", help="Path to the source SQLite file")
@@ -108,6 +112,16 @@ def main() -> None:
 
     if args.command == "rerun-ocr":
         result = rerun_ocr_posts(settings)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "export-obsidian":
+        result = export_obsidian_vault(settings)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "build-question-index":
+        result = build_question_index(settings)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 

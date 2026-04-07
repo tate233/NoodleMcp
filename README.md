@@ -23,6 +23,7 @@
 - 支持 `rerun-ocr` 补跑图片 OCR
 - 支持 `reanalyze-fallback` 补跑 LLM fallback 记录
 - 支持 `reanalyze-missing-questions` 补跑题目为空的记录
+- 支持构建 `canonical_questions` 题目索引，用于按知识点/算法题统计频次和来源
 - 支持导出 Markdown 知识库
 - 支持切换数据库到 PostgreSQL
 
@@ -35,7 +36,8 @@
 5. 下载图片并调用火山 OCR
 6. 将 OCR 文本并入 `raw_text`
 7. 调用 LLM 提取结构化信息，写入 `post_analysis`
-8. 导出到 `knowledge_base/`
+8. 构建题目索引 `canonical_questions`
+9. 导出到 `knowledge_base/`
 
 ## 主要数据表
 
@@ -62,6 +64,15 @@
 ### `kb_documents`
 
 - 导出的 Markdown 文档路径
+
+### `canonical_questions`
+
+- 归并后的题目文本 `canonical_text`
+- 题目类型 `kind`，当前包含 `interview` 和 `algorithm`
+- 所属知识点 `knowledge_point`
+- 出现频次 `frequency`
+- 来源面经 ID `source_raw_post_ids`
+- 原始题目变体 `variants`
 
 ## 常用命令
 
@@ -114,6 +125,50 @@ python -m catch_knowledge.cli migrate-sqlite-to-db --sqlite-path ./data/catch_kn
 ```
 
 这个命令适合你后面切到 PostgreSQL 时使用。
+
+### 导出 Obsidian 知识库
+
+建议先构建题目索引，再导出 Obsidian：
+
+```powershell
+python -m catch_knowledge.cli build-question-index
+```
+
+这个命令会按知识点局部归并题目，并记录频次和来源。目前默认使用快速规则归并，避免每次把全量题目塞给 LLM。
+
+题目索引采用固定一级 taxonomy 作为目录骨架，LLM 抽取出的细考点会保存在题目变体里作为子标签。当前一级目录包括：
+
+- `Java基础`
+- `Java并发`
+- `JVM`
+- `Spring`
+- `MySQL`
+- `Redis`
+- `消息队列`
+- `计算机网络`
+- `操作系统`
+- `分布式系统`
+- `系统设计`
+- `项目经历`
+- `算法题`
+- `AI/RAG`
+- `工程实践`
+- `HR/行为面`
+- `未分类`
+
+```powershell
+python -m catch_knowledge.cli export-obsidian
+```
+
+这个命令会基于当前数据库生成 Obsidian 友好的 Markdown 目录结构：
+
+- `knowledge_base/面经/公司名/单篇面经.md`
+- `knowledge_base/公司/公司名.md`
+- `knowledge_base/面试题/知识点.md`
+- `knowledge_base/算法题/算法题.md`
+- `knowledge_base/面经知识库.md`
+
+在 Obsidian 中直接选择 `knowledge_base/` 作为 Vault 打开，然后从 `面经知识库.md` 进入即可。
 
 ## PostgreSQL 切换方案
 
@@ -222,13 +277,15 @@ python -m catch_knowledge.cli run-once
 
 - 正式切到 PostgreSQL
 - 为后续统计、高频题聚合、Web 查询接口做准备
+- 当前本地开发已经支持通过 Docker Compose 启动 PostgreSQL
 
-### 2. Web UI
+### 2. Obsidian 知识库
 
-- 做一个简洁黑白风格的 Web 页面
-- 风格类似知识库 / Typora 阅读页
-- 支持按公司浏览
-- 支持查看原文、OCR 文本、结构化题目、考点、摘要
+- 将 `knowledge_base/` 作为 Obsidian Vault 打开
+- 使用公司页浏览每家公司面经
+- 使用知识点页查看相关面试题
+- 使用算法题页查看算法题频次和来源
+- 使用双链连接公司、知识点和单篇面经
 
 ### 3. 知识库增强
 
@@ -236,6 +293,7 @@ python -m catch_knowledge.cli run-once
 - 按知识点聚合题目
 - 统计高频题
 - 统计算法题、场景题、项目题
+- 当前已经有第一版题目索引；后续可以在同知识点候选范围内加入 LLM 精修，进一步合并相似问法
 
 ### 4. 服务器部署
 

@@ -105,6 +105,33 @@ class LLMAnalyzer:
                 "error": repr(exc),
             }
 
+    def match_canonical_question(self, knowledge_point: str, new_question: str, candidates: list[dict]) -> int | None:
+        if not candidates:
+            return None
+        trimmed_candidates = candidates[:40]
+        prompt = {
+            "knowledge_point": knowledge_point,
+            "new_question": new_question,
+            "candidates": trimmed_candidates,
+            "instruction": "如果 new_question 与某个候选题本质相同或高度相似，返回该候选题 id；否则返回 null。只返回 JSON：{\"match_id\": 123 或 null}",
+        }
+        try:
+            client = self._build_client()
+            response = client.chat.completions.create(
+                model=self.settings.openai_model,
+                messages=[
+                    {"role": "system", "content": "你是面试题去重助手，只判断题目是否本质相同。只返回 JSON。"},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+            )
+            payload = json.loads(self._extract_json_text(self._extract_output_text(response)))
+            match_id = payload.get("match_id")
+            if match_id is None:
+                return None
+            return int(match_id)
+        except Exception:
+            return None
+
     def _build_client(self) -> OpenAI:
         return OpenAI(
             api_key=(self.settings.openai_api_key or "").strip() or None,

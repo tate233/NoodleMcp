@@ -69,3 +69,20 @@ class KBDocument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     raw_post: Mapped[RawPost] = relationship(back_populates="kb_document")
+
+
+class CanonicalQuestion(Base):
+    __tablename__ = "canonical_questions"
+    __table_args__ = (
+        UniqueConstraint("kind", "knowledge_point", "canonical_text", name="uq_canonical_question"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    knowledge_point: Mapped[str] = mapped_column(String(255), index=True)
+    canonical_text: Mapped[str] = mapped_column(Text)
+    frequency: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    source_raw_post_ids: Mapped[Optional[List[int]]] = mapped_column(JSON)
+    variants: Mapped[Optional[List[Dict]]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
