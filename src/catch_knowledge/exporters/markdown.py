@@ -87,6 +87,7 @@ class MarkdownExporter:
 
         frontmatter = [
             "---",
+            f"raw_post_id: {raw_post.id}",
             f"platform: {raw_post.platform}",
             f"company: {company}",
             f"role: {role}",
@@ -239,12 +240,13 @@ class MarkdownExporter:
         )
         base = self.settings.knowledge_base_dir / "算法题"
         base.mkdir(parents=True, exist_ok=True)
+        lines = ["# 算法题", "", f"题目数：{len(rows)}", "", "## 题目"]
         for item in rows:
-            lines = [f"# {item.canonical_text}", "", f"出现次数：{item.frequency}", "", "## 出现记录"]
+            lines.append(f"- {item.canonical_text}  频次：{item.frequency}")
             for source in self._source_links(session, item.source_raw_post_ids or []):
-                lines.append(f"- {source}")
-            lines.append("")
-            (base / f"{self._slugify(item.canonical_text)}.md").write_text("\n".join(lines), encoding="utf-8")
+                lines.append(f"  - 来源：{source}")
+        lines.append("")
+        (base / "算法题.md").write_text("\n".join(lines), encoding="utf-8")
 
         return {item.canonical_text: item.frequency for item in rows}
 

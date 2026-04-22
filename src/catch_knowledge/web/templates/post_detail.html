@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ record.title if record else '记录不存在' }} - Catch Knowledge</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="page detail-page">
+    <nav class="back-nav">
+      <a href="/">返回操作台</a>
+    </nav>
+
+    {% if not record %}
+    <section class="card">
+      <h1>记录不存在</h1>
+      <p>这条面经可能还没写入数据库，或者 id 不正确。</p>
+    </section>
+    {% else %}
+    {% if message %}
+    <section class="flash flash-{{ message_type }}">
+      {{ message }}
+    </section>
+    {% endif %}
+
+    <section class="hero compact">
+      <div>
+        <p class="eyebrow">Record #{{ record.raw_post_id }}</p>
+        <h1>{{ record.title }}</h1>
+        <p class="subtle">{{ record.analysis.company or '未识别公司' }} / {{ record.analysis.job_role or '未识别岗位' }}</p>
+      </div>
+      <div class="meta-box">
+        <div><span>状态</span><strong>{{ record.status }}</strong></div>
+        <div><span>平台</span><strong>{{ record.platform }}</strong></div>
+        <div><span>抓取时间</span><strong>{{ record.crawled_at }}</strong></div>
+      </div>
+    </section>
+
+    <section class="grid detail-grid">
+      <article class="card">
+        <h2>结构化结果</h2>
+        <div class="kv-list">
+          <div><span>公司</span><strong>{{ record.analysis.company or '未识别' }}</strong></div>
+          <div><span>岗位</span><strong>{{ record.analysis.job_role or '未识别' }}</strong></div>
+          <div><span>方向</span><strong>{{ record.analysis.job_direction or '未识别' }}</strong></div>
+          <div><span>轮次</span><strong>{{ ', '.join(record.analysis.interview_rounds) if record.analysis.interview_rounds else '未识别' }}</strong></div>
+        </div>
+
+        <h3>面试题</h3>
+        <ul class="plain-list">
+          {% for item in record.analysis.interview_questions %}
+          <li>{{ item }}</li>
+          {% else %}
+          <li>暂无面试题</li>
+          {% endfor %}
+        </ul>
+
+        <h3>知识点</h3>
+        <ul class="plain-list">
+          {% for item in record.analysis.question_points %}
+          <li>{{ item }}</li>
+          {% else %}
+          <li>暂无知识点</li>
+          {% endfor %}
+        </ul>
+
+        <h3>摘要</h3>
+        <p class="block-text">{{ record.analysis.summary or '暂无摘要' }}</p>
+      </article>
+
+      <article class="card">
+        <h2>原始内容</h2>
+        <h3>原文</h3>
+        <pre class="content-box">{{ record.raw_source_text or '暂无原文' }}</pre>
+        <h3>图片 OCR</h3>
+        <pre class="content-box">{{ record.raw_image_text or '暂无 OCR 文本' }}</pre>
+      </article>
+    </section>
+
+    <section class="grid detail-grid">
+      <article class="card">
+        <h2>附件与链接</h2>
+        <div class="stack">
+          <div>
+            <span class="label">来源链接</span>
+            <p class="link-line"><a href="{{ record.url }}" target="_blank" rel="noreferrer">{{ record.url }}</a></p>
+          </div>
+          <div>
+            <span class="label">Markdown</span>
+            <p>{{ record.markdown_path or '尚未导出' }}</p>
+          </div>
+          <div>
+            <span class="label">图片</span>
+            <ul class="plain-list">
+              {% for item in record.image_urls %}
+              <li>{{ item }}</li>
+              {% else %}
+              <li>暂无图片</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>使用建议</h2>
+        <ul class="plain-list">
+          <li>如果题目抽取不准，可以去 Obsidian 里手改单篇面经，再运行 `sync-obsidian`。</li>
+          <li>如果你刚上传的是纯图片，先重点检查 OCR 文本是不是完整。</li>
+          <li>如果结构化结果没更新，通常先重跑 `build-question-index` 和 `export-obsidian` 就够了。</li>
+        </ul>
+      </article>
+    </section>
+    {% endif %}
+  </main>
+</body>
+</html>

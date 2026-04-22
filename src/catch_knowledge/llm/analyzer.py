@@ -132,6 +132,39 @@ class LLMAnalyzer:
         except Exception:
             return None
 
+    def suggest_taxonomy_category(self, categories: list[str], new_question: str, points: list[str]) -> str | None:
+        categories = [str(item).strip() for item in categories if str(item).strip()]
+        if not categories:
+            return None
+
+        prompt = {
+            "available_categories": categories,
+            "new_question": new_question,
+            "question_points": points,
+            "instruction": (
+                "如果现有分类都不合适，请建议一个新的一级目录名。"
+                "要求名称简短、稳定、适合作为知识库长期目录。"
+                "只返回 JSON：{\"suggested_category\": \"...\"}，如果不需要新目录则返回 null。"
+            ),
+        }
+        try:
+            client = self._build_client()
+            response = client.chat.completions.create(
+                model=self.settings.openai_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是知识库分类助手，只判断是否需要新增一级目录。只返回 JSON。",
+                    },
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+            )
+            payload = json.loads(self._extract_json_text(self._extract_output_text(response)))
+            suggested = str(payload.get("suggested_category") or "").strip()
+            return suggested or None
+        except Exception:
+            return None
+
     def _build_client(self) -> OpenAI:
         return OpenAI(
             api_key=(self.settings.openai_api_key or "").strip() or None,

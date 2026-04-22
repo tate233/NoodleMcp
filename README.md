@@ -92,6 +92,37 @@ python -m catch_knowledge.cli rerun-ocr
 
 只处理“有图片链接但 `raw_image_text` 为空”的记录。
 
+### 手动导入面经
+
+支持本地文本、Markdown、图片混合导入，导入后会自动走 OCR、LLM 分析、题目索引重建和 Obsidian 导出：
+
+```powershell
+python -m catch_knowledge.cli manual-import --text-file .\example.md --image .\1.png --image .\2.png --title "字节后端二面"
+```
+
+也支持直接传纯文本：
+
+```powershell
+python -m catch_knowledge.cli manual-import --text "这里直接粘贴面经正文" --title "手动上传面经"
+```
+
+### Web 操作台
+
+如果你不想每次都走 CLI，可以启动一个轻量 Web 操作台，用来上传材料、查看最近记录，并一键触发索引重建和 Obsidian 导出：
+
+```powershell
+pip install -e .[web]
+python -m catch_knowledge.cli web --host 127.0.0.1 --port 8000
+```
+
+默认打开：
+
+```text
+http://127.0.0.1:8000
+```
+
+这个 Web 入口负责“上传和触发处理”，知识库阅读和精修仍然建议放在 Obsidian 里完成。
+
 ### 补跑 LLM fallback
 
 ```powershell
@@ -136,6 +167,12 @@ python -m catch_knowledge.cli build-question-index
 
 这个命令会按知识点局部归并题目，并记录频次和来源。目前默认使用快速规则归并，避免每次把全量题目塞给 LLM。
 
+当题目落入 `未分类` 时，系统还会额外记录一个受控扩展建议，不会直接修改主 taxonomy。你可以用下面的命令查看候选目录：
+
+```powershell
+python -m catch_knowledge.cli list-taxonomy-suggestions
+```
+
 题目索引采用固定一级 taxonomy 作为目录骨架，LLM 抽取出的细考点会保存在题目变体里作为子标签。当前一级目录包括：
 
 - `Java基础`
@@ -169,6 +206,25 @@ python -m catch_knowledge.cli export-obsidian
 - `knowledge_base/面经知识库.md`
 
 在 Obsidian 中直接选择 `knowledge_base/` 作为 Vault 打开，然后从 `面经知识库.md` 进入即可。
+
+### 同步 Obsidian 手动修改
+
+如果你在 Obsidian 里修改了单篇面经内容，可以把修改同步回数据库：
+
+```powershell
+python -m catch_knowledge.cli sync-obsidian
+```
+
+第一版只同步 `knowledge_base/面经/**/*.md`，不会读取公司页、面试题页、算法题页这些自动索引页。支持同步的内容包括：
+
+- frontmatter 里的 `company`、`role`、`direction`、`rounds`、`tags`
+- `## 面试题`
+- `## 知识点`
+- `## 摘要`
+- `## 原文`
+- `## 图片 OCR`
+
+同步依赖单篇面经 frontmatter 里的 `raw_post_id`。如果旧文件没有这个字段，先重新执行一次 `export-obsidian`。
 
 ## PostgreSQL 切换方案
 

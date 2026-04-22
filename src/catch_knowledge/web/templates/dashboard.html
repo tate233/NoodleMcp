@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Catch Knowledge Console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Catch Knowledge</p>
+        <h1>面经整理操作台</h1>
+        <p class="subtle">上传文本或图片，后台自动走 OCR、LLM、索引重建和 Obsidian 导出。</p>
+      </div>
+      <div class="actions">
+        <form method="post" action="/actions/build-index">
+          <button type="submit" class="secondary">重建题目索引</button>
+        </form>
+        <form method="post" action="/actions/export-obsidian">
+          <button type="submit" class="secondary">导出 Obsidian</button>
+        </form>
+      </div>
+    </section>
+
+    {% if message %}
+    <section class="flash flash-{{ message_type }}">
+      {{ message }}
+    </section>
+    {% endif %}
+
+    <section class="grid">
+      <article class="card">
+        <h2>手动上传</h2>
+        <form method="post" action="/manual-import" enctype="multipart/form-data" class="stack">
+          <label>
+            <span>标题</span>
+            <input type="text" name="title" placeholder="例如：字节后端二面">
+          </label>
+          <label>
+            <span>来源链接</span>
+            <input type="text" name="source_url" placeholder="可选">
+          </label>
+          <label>
+            <span>作者</span>
+            <input type="text" name="author" placeholder="可选">
+          </label>
+          <label>
+            <span>正文</span>
+            <textarea name="text" rows="10" placeholder="可以直接粘贴文字面经"></textarea>
+          </label>
+          <label>
+            <span>文件</span>
+            <input type="file" name="files" multiple>
+            <small>支持 .txt / .md / 图片。可以只传图片，也可以文字+图片一起传。</small>
+          </label>
+          <button type="submit">开始整理</button>
+        </form>
+      </article>
+
+      <article class="card">
+        <h2>最近记录</h2>
+        <div class="records">
+          {% for record in records %}
+          <a class="record" href="/posts/{{ record.raw_post_id }}">
+            <div class="record-top">
+              <strong>{{ record.title }}</strong>
+              <span class="badge">{{ record.status }}</span>
+            </div>
+            <div class="record-meta">
+              <span>#{{ record.raw_post_id }}</span>
+              <span>{{ record.platform }}</span>
+              <span>{{ record.crawled_at }}</span>
+            </div>
+            <div class="record-summary">
+              {{ record.analysis.summary or '暂无摘要' }}
+            </div>
+          </a>
+          {% else %}
+          <p class="empty">还没有记录，先上传一篇试试。</p>
+          {% endfor %}
+        </div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

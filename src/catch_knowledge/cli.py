@@ -7,10 +7,13 @@ from pathlib import Path
 from catch_knowledge.config import get_settings
 from catch_knowledge.db import create_tables, migrate_sqlite_to_current_db
 from catch_knowledge.llm import LLMAnalyzer
+from catch_knowledge.obsidian_sync import sync_obsidian_to_db
 from catch_knowledge.pipeline import (
     analyze_raw_posts,
     build_question_index,
     export_obsidian_vault,
+    import_manual_note,
+    list_taxonomy_suggestions,
     reanalyze_fallback_posts,
     reanalyze_missing_questions,
     rerun_ocr_posts,
@@ -35,8 +38,20 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("reanalyze-fallback", help="Re-run LLM analysis for rows previously processed via fallback")
     subparsers.add_parser("reanalyze-missing-questions", help="Re-run LLM analysis for rows whose interview_questions column is still empty")
     subparsers.add_parser("rerun-ocr", help="Re-run OCR for rows with image URLs but empty raw_image_text")
+    manual_parser = subparsers.add_parser("manual-import", help="Import a manual interview note from local text and/or image files")
+    manual_parser.add_argument("--title", help="Optional title for the imported note")
+    manual_parser.add_argument("--text", help="Inline text content for the interview note")
+    manual_parser.add_argument("--text-file", help="Path to a local txt/md file")
+    manual_parser.add_argument("--image", action="append", default=[], help="Path to a local image file. Repeat the flag for multiple images.")
+    manual_parser.add_argument("--source-url", help="Optional source URL to record with the note")
+    manual_parser.add_argument("--author", help="Optional author name")
+    web_parser = subparsers.add_parser("web", help="Run the lightweight web console")
+    web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind the web server")
+    web_parser.add_argument("--port", type=int, default=8000, help="Port to bind the web server")
     subparsers.add_parser("export-obsidian", help="Export current analysis results into an Obsidian-friendly vault")
+    subparsers.add_parser("sync-obsidian", help="Sync edited interview notes from Obsidian back into the database")
     subparsers.add_parser("build-question-index", help="Build canonical question index with local per-topic merging")
+    subparsers.add_parser("list-taxonomy-suggestions", help="List pending taxonomy extension suggestions collected during indexing")
     subparsers.add_parser("init-db", help="Initialize database tables for the current DATABASE_URL")
     migrate_parser = subparsers.add_parser("migrate-sqlite-to-db", help="Migrate data from a SQLite file into the current DATABASE_URL")
     migrate_parser.add_argument("--sqlite-path", default="./data/catch_knowledge.db", help="Path to the source SQLite file")
@@ -115,13 +130,47 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
+    if args.command == "manual-import":
+        if not args.text and not args.text_file and not args.image:
+            parser.error("manual-import requires at least one of --text, --text-file, or --image")
+        result = import_manual_note(
+            settings,
+            title=args.title,
+            text=args.text,
+            text_file=Path(args.text_file) if args.text_file else None,
+            image_files=[Path(item) for item in args.image],
+            source_url=args.source_url,
+            author_name=args.author,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "web":
+        try:
+            import uvicorn
+        except ImportError as exc:
+            raise SystemExit("Web UI dependencies are missing. Install with: pip install -e .[web]") from exc
+
+        uvicorn.run("catch_knowledge.web.app:app", host=args.host, port=args.port, reload=False)
+        return
+
     if args.command == "export-obsidian":
         result = export_obsidian_vault(settings)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
+    if args.command == "sync-obsidian":
+        result = sync_obsidian_to_db(settings)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
     if args.command == "build-question-index":
         result = build_question_index(settings)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "list-taxonomy-suggestions":
+        result = list_taxonomy_suggestions(settings)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 

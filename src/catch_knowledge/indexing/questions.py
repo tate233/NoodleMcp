@@ -4,7 +4,7 @@ import re
 
 from sqlalchemy.orm import Session
 
-from catch_knowledge.db.models import CanonicalQuestion, PostAnalysis, RawPost
+from catch_knowledge.db.models import CanonicalQuestion, PostAnalysis, RawPost, TaxonomySuggestion
 from catch_knowledge.llm import LLMAnalyzer
 
 
@@ -21,14 +21,14 @@ class QuestionIndexBuilder:
         ("算法题", ["手撕", "leetcode", "hot100", "算法题", "二叉树", "动态规划", "最大子数组", "无重复子串", "合并两个有序链表", "大数加法", "表达式求值", "打家劫舍"]),
         ("Redis", ["redis", "缓存", "布隆过滤器", "穿透", "雪崩", "击穿", "逻辑过期", "lua", "库存", "big key", "淘汰", "内存"]),
         ("MySQL", ["mysql", "数据库", "索引", "事务", "隔离级别", "分库分表", "sql", "orm", "乐观锁", "悲观锁"]),
+        ("消息队列", ["消息队列", "mq", "kafka", "rocketmq", "消息分发", "投递", "顺序消息"]),
+        ("分布式系统", ["分布式", "一致性", "幂等", "去重", "状态机", "token", "jwt", "权限", "分布式锁"]),
         ("Java并发", ["线程池", "aqs", "并发", "多线程", "锁", "volatile", "synchronized", "阻塞队列", "无界队列"]),
         ("JVM", ["jvm", "gc", "内存管理", "引用", "类加载"]),
         ("Java基础", ["java", "集合", "hashmap", "基础知识", "引用"]),
         ("Spring", ["spring", "springboot", "注解", "bean", "ioc", "aop"]),
-        ("消息队列", ["消息队列", "mq", "kafka", "rocketmq", "消息分发", "投递", "顺序消息"]),
         ("计算机网络", ["http", "https", "tcp", "udp", "quic", "网络协议", "浏览器页面加载"]),
         ("操作系统", ["进程", "线程切换", "操作系统", "内存", "调度"]),
-        ("分布式系统", ["分布式", "一致性", "幂等", "去重", "状态机", "token", "jwt", "权限", "分布式锁"]),
         ("系统设计", ["系统设计", "秒杀", "高并发", "架构", "服务", "支付", "订单", "登录系统", "排行榜", "超卖", "防刷"]),
         ("AI/RAG", ["ai", "rag", "大模型", "知识库", "bm25", "召回", "查询改写", "agent"]),
         ("项目经历", ["项目", "实习", "科研", "业务", "难点", "技术栈", "项目经验", "项目介绍"]),
@@ -44,9 +44,16 @@ class QuestionIndexBuilder:
 
     def rebuild(self, session: Session) -> dict:
         session.query(CanonicalQuestion).delete()
+        session.query(TaxonomySuggestion).delete()
         session.flush()
 
-        stats = {"questions_seen": 0, "canonical_questions": 0, "merged": 0, "created": 0}
+        stats = {
+            "questions_seen": 0,
+            "canonical_questions": 0,
+            "merged": 0,
+            "created": 0,
+            "taxonomy_suggestions": 0,
+        }
         rows = (
             session.query(RawPost, PostAnalysis)
             .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
@@ -65,6 +72,11 @@ class QuestionIndexBuilder:
 
                 stats["questions_seen"] += 1
                 category = self._classify_question(clean_question, points)
+                if category == self.fallback_category:
+                    suggestion_name = self._suggest_category(clean_question, points)
+                    if suggestion_name:
+                        self._record_suggestion(session, suggestion_name, raw_post, clean_question)
+                        stats["taxonomy_suggestions"] += 1
                 kind = "algorithm" if category == self.algorithm_category else "interview"
                 subtopics = self._matching_subtopics(clean_question, points, category)
 
@@ -96,6 +108,15 @@ class QuestionIndexBuilder:
         session.commit()
         return stats
 
+    def _suggest_category(self, question: str, points: list[str]) -> str | None:
+        suggested = self.analyzer.suggest_taxonomy_category(self.available_categories(), question, points)
+        clean_name = self._clean(suggested)
+        if not clean_name:
+            return None
+        if clean_name in self.available_categories() or clean_name == self.fallback_category:
+            return None
+        return clean_name[:80]
+
     def _find_match(self, session: Session, kind: str, point: str, question: str):
         candidates = (
             session.query(CanonicalQuestion)
@@ -123,6 +144,35 @@ class QuestionIndexBuilder:
         canonical.source_raw_post_ids = source_ids
         canonical.variants = variants
         canonical.frequency = len(variants)
+
+    @staticmethod
+    def _record_suggestion(session: Session, suggested_name: str, raw_post: RawPost, question: str) -> None:
+        suggestion = (
+            session.query(TaxonomySuggestion)
+            .filter(TaxonomySuggestion.suggested_name == suggested_name)
+            .one_or_none()
+        )
+        if suggestion is None:
+            suggestion = TaxonomySuggestion(
+                suggested_name=suggested_name,
+                status="pending",
+                frequency=1,
+                source_raw_post_ids=[raw_post.id],
+                example_questions=[question],
+            )
+            session.add(suggestion)
+            session.flush()
+            return
+
+        source_ids = list(suggestion.source_raw_post_ids or [])
+        if raw_post.id not in source_ids:
+            source_ids.append(raw_post.id)
+        examples = list(suggestion.example_questions or [])
+        if question not in examples:
+            examples.append(question)
+        suggestion.source_raw_post_ids = source_ids
+        suggestion.example_questions = examples[:10]
+        suggestion.frequency = int(suggestion.frequency or 0) + 1
 
     def _classify_question(self, question: str, points: list[str]) -> str:
         if self._is_algorithm_question(question, points):
@@ -196,6 +246,9 @@ class QuestionIndexBuilder:
             if self._normalize(clean_point) in normalized_question or self._classify_point(clean_point) == category:
                 selected.append(clean_point)
         return sorted(set(selected))
+
+    def available_categories(self) -> list[str]:
+        return [category for category, _ in self.taxonomy]
 
     @staticmethod
     def _clean(value) -> str:

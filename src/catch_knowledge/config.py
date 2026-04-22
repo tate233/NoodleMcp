@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     knowledge_base_dir: Path = Path("./knowledge_base")
     raw_archive_dir: Path = Path("./data/raw")
     image_cache_dir: Path = Path("./data/images")
+    web_upload_dir: Path = Path("./data/web_uploads")
 
     source_platform: str = "xiaohongshu_mcp"
 
@@ -88,6 +89,7 @@ def get_settings() -> Settings:
     settings.knowledge_base_dir.mkdir(parents=True, exist_ok=True)
     settings.raw_archive_dir.mkdir(parents=True, exist_ok=True)
     settings.image_cache_dir.mkdir(parents=True, exist_ok=True)
+    settings.web_upload_dir.mkdir(parents=True, exist_ok=True)
     settings.nowcoder_storage_state_path.parent.mkdir(parents=True, exist_ok=True)
     settings.xhs_login_qrcode_path.parent.mkdir(parents=True, exist_ok=True)
     return settings

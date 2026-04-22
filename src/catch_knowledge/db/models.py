@@ -86,3 +86,19 @@ class CanonicalQuestion(Base):
     variants: Mapped[Optional[List[Dict]]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class TaxonomySuggestion(Base):
+    __tablename__ = "taxonomy_suggestions"
+    __table_args__ = (
+        UniqueConstraint("suggested_name", name="uq_taxonomy_suggestions_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    suggested_name: Mapped[str] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    frequency: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    source_raw_post_ids: Mapped[Optional[List[int]]] = mapped_column(JSON)
+    example_questions: Mapped[Optional[List[str]]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -31,7 +32,7 @@ class VolcengineOCRProcessor:
 
         for index, image_url in enumerate(post.image_urls[: self.settings.ocr_max_images_per_post], start=1):
             try:
-                file_path = self._download_image(post, image_url, index)
+                file_path = self._materialize_image(post, image_url, index)
                 cached_paths.append(str(file_path))
                 text = self._ocr_image(file_path)
                 if text:
@@ -64,6 +65,20 @@ class VolcengineOCRProcessor:
             image_urls=post.image_urls,
             metadata_json=metadata,
         )
+
+    def _materialize_image(self, post: CollectedPost, image_url: str, index: int) -> Path:
+        local_path = Path(image_url)
+        if local_path.exists():
+            return self._copy_local_image(post, local_path, index)
+        return self._download_image(post, image_url, index)
+
+    def _copy_local_image(self, post: CollectedPost, image_path: Path, index: int) -> Path:
+        suffix = image_path.suffix.lower() or ".jpg"
+        digest = hashlib.sha256(str(image_path).encode("utf-8")).hexdigest()[:12]
+        filename = f"{post.platform}_{post.post_id}_{index}_{digest}{suffix}"
+        file_path = self.settings.image_cache_dir / filename
+        shutil.copy2(image_path, file_path)
+        return file_path
 
     def _download_image(self, post: CollectedPost, image_url: str, index: int) -> Path:
         normalized_url = self._normalize_image_url(image_url)
