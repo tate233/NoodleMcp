@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class AnalysisSchema(BaseModel):
+    content_type: str = Field(default="interview_note")
     is_interview_experience: bool = Field(default=False)
     company: Optional[str] = None
     job_role: Optional[str] = None

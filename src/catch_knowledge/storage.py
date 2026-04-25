@@ -63,6 +63,7 @@ def save_analysis(session: Session, raw_post: RawPost, analysis: StructuredAnaly
     existing = session.scalar(select(PostAnalysis).where(PostAnalysis.raw_post_id == raw_post.id))
     used_fallback = bool((analysis.normalized_json or {}).get("llm_fallback"))
     payload = dict(
+        content_type=analysis.content_type,
         is_interview_experience=analysis.is_interview_experience,
         company=analysis.company,
         job_role=analysis.job_role,

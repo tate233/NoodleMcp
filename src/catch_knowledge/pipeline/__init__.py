@@ -6,6 +6,8 @@ from .run import (
     list_taxonomy_suggestions,
     reanalyze_fallback_posts,
     reanalyze_missing_questions,
+    reanalyze_single_post,
+    process_llm_retry_queue,
     rerun_ocr_posts,
     run_pipeline,
 )
@@ -19,5 +21,7 @@ __all__ = [
     "list_taxonomy_suggestions",
     "reanalyze_fallback_posts",
     "reanalyze_missing_questions",
+    "reanalyze_single_post",
+    "process_llm_retry_queue",
     "rerun_ocr_posts",
 ]

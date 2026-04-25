@@ -18,7 +18,11 @@ from catch_knowledge.domain import CollectedPost
 class VolcengineOCRProcessor:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._client = httpx.Client(timeout=settings.ocr_download_timeout_seconds, follow_redirects=True)
+        self._client = httpx.Client(
+            timeout=settings.ocr_download_timeout_seconds,
+            follow_redirects=True,
+            trust_env=False,
+        )
 
     def enrich_post(self, post: CollectedPost) -> CollectedPost:
         if not self.settings.ocr_enabled or self.settings.ocr_provider != "volcengine":
@@ -103,7 +107,17 @@ class VolcengineOCRProcessor:
             "half_to_full": "true" if self.settings.volcengine_ocr_half_to_full else "false",
         }
         body = urlencode(body_data)
-        response = self._signed_post(body)
+        last_error: Exception | None = None
+        response = None
+        for _ in range(2):
+            try:
+                response = self._signed_post(body)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+        if response is None:
+            raise RuntimeError(f"Volcengine OCR request failed: {last_error!r}")
         payload = response.json()
 
         if payload.get("code") != 10000:

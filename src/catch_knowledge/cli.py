@@ -14,6 +14,7 @@ from catch_knowledge.pipeline import (
     export_obsidian_vault,
     import_manual_note,
     list_taxonomy_suggestions,
+    process_llm_retry_queue,
     reanalyze_fallback_posts,
     reanalyze_missing_questions,
     rerun_ocr_posts,
@@ -37,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("analyze-pending", help="Analyze collected raw posts that have not been processed")
     subparsers.add_parser("reanalyze-fallback", help="Re-run LLM analysis for rows previously processed via fallback")
     subparsers.add_parser("reanalyze-missing-questions", help="Re-run LLM analysis for rows whose interview_questions column is still empty")
+    retry_queue_parser = subparsers.add_parser("process-llm-retry-queue", help="Retry queued rows that previously fell back due to LLM instability")
+    retry_queue_parser.add_argument("--limit", type=int, default=20, help="Maximum queued rows to process")
     subparsers.add_parser("rerun-ocr", help="Re-run OCR for rows with image URLs but empty raw_image_text")
     manual_parser = subparsers.add_parser("manual-import", help="Import a manual interview note from local text and/or image files")
     manual_parser.add_argument("--title", help="Optional title for the imported note")
@@ -48,6 +51,29 @@ def build_parser() -> argparse.ArgumentParser:
     web_parser = subparsers.add_parser("web", help="Run the lightweight web console")
     web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind the web server")
     web_parser.add_argument("--port", type=int, default=8000, help="Port to bind the web server")
+    qq_parser = subparsers.add_parser("qq-adapter", help="Run the NapCat QQ adapter webhook")
+    qq_parser.add_argument("--host", default="127.0.0.1", help="Host to bind the QQ adapter")
+    qq_parser.add_argument("--port", type=int, default=8090, help="Port to bind the QQ adapter")
+    qq_parser.add_argument(
+        "--ingest-base-url",
+        default="http://127.0.0.1:8000",
+        help="Base URL of the catch-knowledge web service",
+    )
+    qq_parser.add_argument(
+        "--napcat-api-base-url",
+        default="http://127.0.0.1:3000",
+        help="Base URL of the NapCat HTTP API",
+    )
+    qq_parser.add_argument(
+        "--napcat-access-token",
+        default="",
+        help="Optional access token for calling NapCat API",
+    )
+    qq_parser.add_argument(
+        "--webhook-secret",
+        default="",
+        help="Optional bearer token expected from NapCat webhook requests",
+    )
     subparsers.add_parser("export-obsidian", help="Export current analysis results into an Obsidian-friendly vault")
     subparsers.add_parser("sync-obsidian", help="Sync edited interview notes from Obsidian back into the database")
     subparsers.add_parser("build-question-index", help="Build canonical question index with local per-topic merging")
@@ -125,6 +151,11 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
+    if args.command == "process-llm-retry-queue":
+        result = process_llm_retry_queue(settings, limit=args.limit)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
     if args.command == "rerun-ocr":
         result = rerun_ocr_posts(settings)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -152,6 +183,23 @@ def main() -> None:
             raise SystemExit("Web UI dependencies are missing. Install with: pip install -e .[web]") from exc
 
         uvicorn.run("catch_knowledge.web.app:app", host=args.host, port=args.port, reload=False)
+        return
+
+    if args.command == "qq-adapter":
+        try:
+            import uvicorn
+        except ImportError as exc:
+            raise SystemExit("Web/API dependencies are missing. Install with: pip install -e .[web]") from exc
+
+        from catch_knowledge.adapters import create_qq_adapter_app
+
+        app = create_qq_adapter_app(
+            ingest_base_url=args.ingest_base_url,
+            napcat_api_base_url=args.napcat_api_base_url or None,
+            napcat_access_token=args.napcat_access_token or None,
+            webhook_secret=args.webhook_secret or None,
+        )
+        uvicorn.run(app, host=args.host, port=args.port, reload=False)
         return
 
     if args.command == "export-obsidian":

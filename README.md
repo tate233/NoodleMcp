@@ -123,6 +123,114 @@ http://127.0.0.1:8000
 
 这个 Web 入口负责“上传和触发处理”，知识库阅读和精修仍然建议放在 Obsidian 里完成。
 
+### QQ 接入（NapCat）
+
+如果你想直接通过 QQ 私聊把文字或截图投喂进系统，推荐用 `NapCatQQ + 本项目自带 qq-adapter`：
+
+1. 先启动主 Web 服务
+
+```powershell
+python -m catch_knowledge.cli web --host 127.0.0.1 --port 8000
+```
+
+2. 再启动 QQ adapter
+
+```powershell
+python -m catch_knowledge.cli qq-adapter --host 127.0.0.1 --port 8090 --ingest-base-url http://127.0.0.1:8000 --napcat-api-base-url http://127.0.0.1:3000
+```
+
+3. 在 NapCat 里把私聊消息事件上报到：
+
+```text
+http://127.0.0.1:8090/qq/webhook
+```
+
+4. 之后你给这个 QQ 号发：
+- 纯文字
+- 图片
+- 图文混合
+
+adapter 会自动转发给：
+- `POST /api/ingest/text`
+- 或 `POST /api/ingest/message`
+
+然后由主系统完成：
+- OCR
+- LLM 分析
+- 入库
+- 题目索引重建
+- Obsidian 导出
+
+如果配置了 NapCat API 地址，adapter 还会自动给你回一条简短结果，比如：
+
+```text
+已收录
+类型：knowledge_snippet
+状态：processed
+题目：问到https，问了证书伪造怎么办
+记录ID：22
+```
+
+### 对话入口用的最小上传 API
+
+为了后续接微信 / QQ，这个 Web 服务现在也提供了最小上传 API。聊天侧只需要把文字和图片转发到这里，不需要直接调用 CLI。
+
+健康检查：
+
+```text
+GET /api/health
+```
+
+纯文本上传：
+
+```text
+POST /api/ingest/text
+Content-Type: application/json
+```
+
+示例：
+
+```json
+{
+  "title": "问到https，问了证书伪造怎么办",
+  "text": "问到https，问了证书伪造怎么办",
+  "source": "wechat",
+  "sender": "tate"
+}
+```
+
+文本 + 图片混合上传：
+
+```text
+POST /api/ingest/message
+Content-Type: multipart/form-data
+```
+
+可传字段：
+
+- `title`
+- `text`
+- `source_url`
+- `author`
+- `source`
+- `sender`
+- `files`（可多文件，支持 txt/md/图片）
+
+返回结果会带：
+
+- `raw_post_id`
+- `status`
+- `content_type`
+- `interview_questions`
+- `question_points`
+- `summary`
+
+这样微信 / QQ adapter 只要做一件事：
+
+1. 收消息
+2. 把文字和附件转发到 `/api/ingest/message`
+3. 把返回结果回显给你
+
 ### 补跑 LLM fallback
 
 ```powershell

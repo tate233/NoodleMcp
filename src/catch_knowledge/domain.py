@@ -23,6 +23,7 @@ class CollectedPost:
 
 @dataclass
 class StructuredAnalysis:
+    content_type: str
     is_interview_experience: bool
     company: Optional[str]
     job_role: Optional[str]

@@ -41,6 +41,7 @@ class PostAnalysis(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     raw_post_id: Mapped[int] = mapped_column(ForeignKey("raw_posts.id"), unique=True, index=True)
+    content_type: Mapped[str] = mapped_column(String(32), default="interview_note", index=True)
     is_interview_experience: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     company: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     job_role: Mapped[Optional[str]] = mapped_column(String(255), index=True)

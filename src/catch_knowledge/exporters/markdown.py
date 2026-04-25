@@ -6,6 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from catch_knowledge.config import Settings
@@ -33,7 +34,10 @@ class MarkdownExporter:
         rows = (
             session.query(RawPost, PostAnalysis)
             .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
-            .filter(PostAnalysis.is_interview_experience.is_(True))
+            .filter(
+                PostAnalysis.is_interview_experience.is_(True),
+                or_(PostAnalysis.content_type == "interview_note", PostAnalysis.content_type.is_(None)),
+            )
             .order_by(RawPost.id.asc())
             .all()
         )
@@ -58,6 +62,101 @@ class MarkdownExporter:
         stats["index_pages"] = 1
         return stats
 
+    def sync_posts(self, session: Session, raw_post_ids: List[int]) -> dict:
+        if not raw_post_ids:
+            return {"note_pages": 0, "company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+
+        impacted_ids = {int(raw_post_id) for raw_post_id in raw_post_ids}
+        stats = {"note_pages": 0, "company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+        affected_companies = set()
+        affected_points = set()
+        affected_algorithm = False
+
+        rows = (
+            session.query(RawPost, PostAnalysis, KBDocument)
+            .outerjoin(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
+            .outerjoin(KBDocument, KBDocument.raw_post_id == RawPost.id)
+            .filter(RawPost.id.in_(list(impacted_ids)))
+            .order_by(RawPost.id.asc())
+            .all()
+        )
+
+        for raw_post, analysis, kb_document in rows:
+            old_company = self._extract_company_from_path(kb_document.markdown_path) if kb_document else None
+            if old_company:
+                affected_companies.add(old_company)
+
+            if analysis:
+                if analysis.company:
+                    affected_companies.add(self._clean_name(analysis.company))
+                for point in analysis.question_points or []:
+                    clean_point = self._clean_name(point)
+                    if clean_point:
+                        affected_points.add(clean_point)
+                if self._extract_algorithm_questions(analysis.interview_questions or []):
+                    affected_algorithm = True
+
+            affected_points.update(self._canonical_points_for_post(session, raw_post.id))
+            if self._has_algorithm_entry_for_post(session, raw_post.id):
+                affected_algorithm = True
+
+            should_export = bool(
+                analysis
+                and analysis.is_interview_experience
+                and (analysis.content_type or "interview_note") == "interview_note"
+            )
+
+            if should_export:
+                title, path = self.export(raw_post, analysis)
+                save_needed = kb_document is None or kb_document.markdown_path != str(path) or kb_document.doc_title != title
+                if kb_document and kb_document.markdown_path != str(path):
+                    self._unlink_file(Path(kb_document.markdown_path))
+                if save_needed:
+                    from catch_knowledge.storage import save_kb_document
+
+                    save_kb_document(session, raw_post, title, path)
+                stats["note_pages"] += 1
+            elif kb_document:
+                self._unlink_file(Path(kb_document.markdown_path))
+                session.delete(kb_document)
+
+        company_pages = 0
+        for company in sorted(affected_companies):
+            if not company:
+                continue
+            if self._sync_company_page(session, company):
+                company_pages += 1
+        stats["company_pages"] = company_pages
+
+        knowledge_point_pages = 0
+        for point in sorted(affected_points):
+            if not point:
+                continue
+            if self._sync_knowledge_point_page(session, point):
+                knowledge_point_pages += 1
+        stats["knowledge_point_pages"] = knowledge_point_pages
+
+        if affected_algorithm:
+            self._sync_algorithm_page(session)
+            stats["algorithm_pages"] = 1
+
+        all_rows = (
+            session.query(RawPost, PostAnalysis)
+            .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
+            .filter(
+                PostAnalysis.is_interview_experience.is_(True),
+                or_(PostAnalysis.content_type == "interview_note", PostAnalysis.content_type.is_(None)),
+            )
+            .order_by(RawPost.id.asc())
+            .all()
+        )
+        knowledge_points = self._current_knowledge_point_counts(session)
+        algorithms = self._current_algorithm_counts(session)
+        self._export_home_index(all_rows, knowledge_points, algorithms)
+        stats["index_pages"] = 1
+
+        return stats
+
     def _clear_generated_vault(self) -> None:
         base = self.settings.knowledge_base_dir.resolve()
         base.mkdir(parents=True, exist_ok=True)
@@ -74,6 +173,81 @@ class MarkdownExporter:
             if base not in home.parents:
                 raise ValueError(f"Refusing to remove unsafe path: {home}")
             home.unlink()
+
+    def _sync_company_page(self, session: Session, company: str) -> bool:
+        company = self._clean_name(company) or "鏈煡鍏徃"
+        rows = (
+            session.query(RawPost, PostAnalysis)
+            .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
+            .filter(
+                PostAnalysis.is_interview_experience.is_(True),
+                or_(PostAnalysis.content_type == "interview_note", PostAnalysis.content_type.is_(None)),
+                PostAnalysis.company == company,
+            )
+            .order_by(RawPost.id.asc())
+            .all()
+        )
+        path = self.settings.knowledge_base_dir / "鍏徃" / f"{self._slugify(company)}.md"
+        if not rows:
+            self._unlink_file(path)
+            return False
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f"# {company}", "", "## 闈㈢粡璁板綍"]
+        for raw_post, analysis in rows:
+            note_title = self._build_title(raw_post, analysis)
+            rel_link = self._obsidian_link("闈㈢粡", company, note_title, raw_post, analysis)
+            lines.append(f"- {rel_link}")
+        lines.append("")
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return True
+
+    def _sync_knowledge_point_page(self, session: Session, point: str) -> bool:
+        point = self._clean_name(point) or "未分类"
+        rows = (
+            session.query(CanonicalQuestion)
+            .filter(CanonicalQuestion.kind == "interview", CanonicalQuestion.knowledge_point == point)
+            .order_by(CanonicalQuestion.frequency.desc(), CanonicalQuestion.id.asc())
+            .all()
+        )
+        path = self.settings.knowledge_base_dir / "面试题" / f"{self._slugify(point)}.md"
+        if not rows:
+            self._unlink_file(path)
+            return False
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f"# {point}", "", f"题目数：{len(rows)}", "", "## 题目"]
+        for item in rows:
+            lines.append(f"- {item.canonical_text}  频次：{item.frequency}")
+            subtopics = self._canonical_subtopics(item)
+            if subtopics:
+                lines.append(f"  - 细考点：{', '.join(subtopics)}")
+            for source in self._source_links(session, item.source_raw_post_ids or []):
+                lines.append(f"  - 来源：{source}")
+        lines.append("")
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return True
+
+    def _sync_algorithm_page(self, session: Session) -> None:
+        rows = (
+            session.query(CanonicalQuestion)
+            .filter(CanonicalQuestion.kind == "algorithm")
+            .order_by(CanonicalQuestion.frequency.desc(), CanonicalQuestion.id.asc())
+            .all()
+        )
+        path = self.settings.knowledge_base_dir / "算法题" / "算法题.md"
+        if not rows:
+            self._unlink_file(path)
+            return
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = ["# 算法题", "", f"题目数：{len(rows)}", "", "## 题目"]
+        for item in rows:
+            lines.append(f"- {item.canonical_text}  频次：{item.frequency}")
+            for source in self._source_links(session, item.source_raw_post_ids or []):
+                lines.append(f"  - 来源：{source}")
+        lines.append("")
+        path.write_text("\n".join(lines), encoding="utf-8")
 
     def _render_interview_note(self, raw_post: RawPost, analysis: PostAnalysis, title: str) -> str:
         company = self._clean_name(analysis.company) or "未知公司"
@@ -111,6 +285,7 @@ class MarkdownExporter:
             f"- 岗位：{role}",
             f"- 方向：{direction}",
             f"- 轮次：{', '.join(rounds)}",
+            f"- 内容类型：{analysis.content_type}",
             f"- 原帖：{raw_post.url}",
             "",
             "## 面试题",
@@ -250,6 +425,62 @@ class MarkdownExporter:
 
         return {item.canonical_text: item.frequency for item in rows}
 
+    def _current_knowledge_point_counts(self, session: Session) -> Dict[str, int]:
+        rows = (
+            session.query(CanonicalQuestion)
+            .filter(CanonicalQuestion.kind == "interview")
+            .all()
+        )
+        grouped: Dict[str, int] = defaultdict(int)
+        for row in rows:
+            grouped[row.knowledge_point] += int(row.frequency or 0)
+        return dict(grouped)
+
+    def _current_algorithm_counts(self, session: Session) -> Dict[str, int]:
+        rows = (
+            session.query(CanonicalQuestion)
+            .filter(CanonicalQuestion.kind == "algorithm")
+            .all()
+        )
+        return {row.canonical_text: int(row.frequency or 0) for row in rows}
+
+    @staticmethod
+    def _unlink_file(path: Path) -> None:
+        try:
+            if path.exists():
+                path.unlink()
+        except FileNotFoundError:
+            return
+
+    @staticmethod
+    def _extract_company_from_path(markdown_path: str | None) -> str | None:
+        if not markdown_path:
+            return None
+        parts = Path(markdown_path).parts
+        if "闈㈢粡" not in parts:
+            return None
+        try:
+            index = parts.index("闈㈢粡")
+            return parts[index + 1]
+        except (ValueError, IndexError):
+            return None
+
+    @staticmethod
+    def _canonical_points_for_post(session: Session, raw_post_id: int) -> set[str]:
+        points = set()
+        for row in session.query(CanonicalQuestion).filter(CanonicalQuestion.kind == "interview").all():
+            source_ids = row.source_raw_post_ids or []
+            if raw_post_id in source_ids:
+                points.add(row.knowledge_point)
+        return points
+
+    @staticmethod
+    def _has_algorithm_entry_for_post(session: Session, raw_post_id: int) -> bool:
+        for row in session.query(CanonicalQuestion).filter(CanonicalQuestion.kind == "algorithm").all():
+            if raw_post_id in (row.source_raw_post_ids or []):
+                return True
+        return False
+
     def _export_home_index(self, rows, knowledge_points: Dict[str, int], algorithms: Dict[str, int]) -> None:
         base = self.settings.knowledge_base_dir
         lines = [
@@ -307,8 +538,12 @@ class MarkdownExporter:
         links = []
         for raw_post, analysis in rows:
             company = self._clean_name(analysis.company) or "未知公司"
-            title = self._build_title(raw_post, analysis)
-            links.append(f"[[{company}]] / {self._obsidian_link('面经', company, title, raw_post, analysis)}")
+            if (analysis.content_type or "interview_note") == "interview_note":
+                title = self._build_title(raw_post, analysis)
+                links.append(f"[[{company}]] / {self._obsidian_link('面经', company, title, raw_post, analysis)}")
+            else:
+                snippet_label = raw_post.title or analysis.summary or f"片段 {raw_post.id}"
+                links.append(f"[[{company}]] / 片段#{raw_post.id}：{snippet_label[:60]}")
         return links
 
     @staticmethod

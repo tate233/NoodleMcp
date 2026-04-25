@@ -30,7 +30,9 @@ class QuestionIndexBuilder:
         ("计算机网络", ["http", "https", "tcp", "udp", "quic", "网络协议", "浏览器页面加载"]),
         ("操作系统", ["进程", "线程切换", "操作系统", "内存", "调度"]),
         ("系统设计", ["系统设计", "秒杀", "高并发", "架构", "服务", "支付", "订单", "登录系统", "排行榜", "超卖", "防刷"]),
-        ("AI/RAG", ["ai", "rag", "大模型", "知识库", "bm25", "召回", "查询改写", "agent"]),
+        ("AI/RAG", ["rag", "知识库", "bm25", "召回", "重排", "embedding", "向量库", "chunk", "查询改写", "检索增强"]),
+        ("Agent开发", ["agent", "function calling", "tool calling", "workflow", "multi-agent", "planner", "memory", "智能体", "任务编排", "工具调用"]),
+        ("LLM应用工程", ["ai", "大模型", "prompt", "结构化输出", "模型路由", "模型降级", "token", "评测", "观测", "推理", "ai coding"]),
         ("项目经历", ["项目", "实习", "科研", "业务", "难点", "技术栈", "项目经验", "项目介绍"]),
         ("HR/行为面", ["自我介绍", "职业规划", "沟通", "兴趣", "转行", "地域", "团队协作", "留用", "行为面"]),
         ("工程实践", ["排查", "性能优化", "日志", "elk", "elasticsearch", "动态配置", "oss", "代码质量", "责任链", "ddd", "领域驱动"]),
@@ -108,6 +110,85 @@ class QuestionIndexBuilder:
         session.commit()
         return stats
 
+    def sync_posts(self, session: Session, raw_post_ids: list[int]) -> dict:
+        if not raw_post_ids:
+            return {
+                "questions_seen": 0,
+                "canonical_questions": session.query(CanonicalQuestion).count(),
+                "merged": 0,
+                "created": 0,
+                "taxonomy_suggestions": 0,
+                "removed_occurrences": 0,
+            }
+
+        impacted_ids = {int(raw_post_id) for raw_post_id in raw_post_ids}
+        stats = {
+            "questions_seen": 0,
+            "canonical_questions": 0,
+            "merged": 0,
+            "created": 0,
+            "taxonomy_suggestions": 0,
+            "removed_occurrences": 0,
+        }
+
+        stats["removed_occurrences"] = self._remove_existing_occurrences(session, impacted_ids)
+
+        rows = (
+            session.query(RawPost, PostAnalysis)
+            .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
+            .filter(
+                RawPost.id.in_(list(impacted_ids)),
+                PostAnalysis.is_interview_experience.is_(True),
+            )
+            .order_by(RawPost.id.asc())
+            .all()
+        )
+
+        for raw_post, analysis in rows:
+            questions = analysis.interview_questions or []
+            points = analysis.question_points or []
+            for question in questions:
+                clean_question = self._clean(question)
+                if not clean_question:
+                    continue
+
+                stats["questions_seen"] += 1
+                category = self._classify_question(clean_question, points)
+                if category == self.fallback_category:
+                    suggestion_name = self._suggest_category(clean_question, points)
+                    if suggestion_name:
+                        self._record_suggestion(session, suggestion_name, raw_post, clean_question)
+                        stats["taxonomy_suggestions"] += 1
+                kind = "algorithm" if category == self.algorithm_category else "interview"
+                subtopics = self._matching_subtopics(clean_question, points, category)
+
+                matched = self._find_match(session, kind, category, clean_question)
+                if matched:
+                    self._add_occurrence(matched, raw_post, clean_question, subtopics)
+                    stats["merged"] += 1
+                    continue
+
+                created = CanonicalQuestion(
+                    kind=kind,
+                    knowledge_point=category,
+                    canonical_text=clean_question,
+                    frequency=1,
+                    source_raw_post_ids=[raw_post.id],
+                    variants=[
+                        {
+                            "raw_post_id": raw_post.id,
+                            "question": clean_question,
+                            "subtopics": subtopics,
+                        }
+                    ],
+                )
+                session.add(created)
+                session.flush()
+                stats["created"] += 1
+
+        stats["canonical_questions"] = session.query(CanonicalQuestion).count()
+        return stats
+
     def _suggest_category(self, question: str, points: list[str]) -> str | None:
         suggested = self.analyzer.suggest_taxonomy_category(self.available_categories(), question, points)
         clean_name = self._clean(suggested)
@@ -133,6 +214,39 @@ class QuestionIndexBuilder:
                 return candidate
 
         return None
+
+    def _remove_existing_occurrences(self, session: Session, impacted_ids: set[int]) -> int:
+        removed_occurrences = 0
+
+        for canonical in session.query(CanonicalQuestion).all():
+            source_ids = [raw_post_id for raw_post_id in (canonical.source_raw_post_ids or []) if raw_post_id not in impacted_ids]
+            variants = []
+            for variant in canonical.variants or []:
+                if not isinstance(variant, dict):
+                    continue
+                if variant.get("raw_post_id") in impacted_ids:
+                    removed_occurrences += 1
+                    continue
+                variants.append(variant)
+
+            if not variants:
+                session.delete(canonical)
+                continue
+
+            canonical.source_raw_post_ids = source_ids
+            canonical.variants = variants
+            canonical.frequency = len(variants)
+
+        for suggestion in session.query(TaxonomySuggestion).all():
+            source_ids = [raw_post_id for raw_post_id in (suggestion.source_raw_post_ids or []) if raw_post_id not in impacted_ids]
+            if not source_ids:
+                session.delete(suggestion)
+                continue
+            suggestion.source_raw_post_ids = source_ids
+            suggestion.frequency = len(source_ids)
+
+        session.flush()
+        return removed_occurrences
 
     @staticmethod
     def _add_occurrence(canonical: CanonicalQuestion, raw_post: RawPost, question: str, subtopics: list[str]) -> None:

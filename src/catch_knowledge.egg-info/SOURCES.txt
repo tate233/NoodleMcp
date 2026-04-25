@@ -4,6 +4,8 @@ src/catch_knowledge/__init__.py
 src/catch_knowledge/cli.py
 src/catch_knowledge/config.py
 src/catch_knowledge/domain.py
+src/catch_knowledge/manual_import.py
+src/catch_knowledge/obsidian_sync.py
 src/catch_knowledge/scheduler.py
 src/catch_knowledge/storage.py
 src/catch_knowledge.egg-info/PKG-INFO
@@ -19,6 +21,8 @@ src/catch_knowledge/db/models.py
 src/catch_knowledge/db/session.py
 src/catch_knowledge/exporters/__init__.py
 src/catch_knowledge/exporters/markdown.py
+src/catch_knowledge/indexing/__init__.py
+src/catch_knowledge/indexing/questions.py
 src/catch_knowledge/llm/__init__.py
 src/catch_knowledge/llm/analyzer.py
 src/catch_knowledge/llm/schemas.py
@@ -31,3 +35,8 @@ src/catch_knowledge/sources/base.py
 src/catch_knowledge/sources/nowcoder.py
 src/catch_knowledge/sources/playwright_support.py
 src/catch_knowledge/sources/xiaohongshu_mcp.py
+src/catch_knowledge/web/__init__.py
+src/catch_knowledge/web/app.py
+src/catch_knowledge/web/static/styles.css
+src/catch_knowledge/web/templates/dashboard.html
+src/catch_knowledge/web/templates/post_detail.html

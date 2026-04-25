@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from catch_knowledge.config import Settings
 from catch_knowledge.domain import CollectedPost
@@ -22,6 +23,8 @@ class ManualImportRequest:
 
 
 def build_manual_post(settings: Settings, request: ManualImportRequest) -> CollectedPost:
+    local_tz = ZoneInfo(settings.timezone)
+    now_local = datetime.now(local_tz)
     text_content = _resolve_text(request.text, request.text_file)
     title = _resolve_title(request.title, request.text_file, text_content, request.image_files)
     if not text_content and not request.image_files:
@@ -52,7 +55,7 @@ def build_manual_post(settings: Settings, request: ManualImportRequest) -> Colle
 
     metadata: Dict = {
         "source_type": "manual_upload",
-        "imported_at": datetime.now(timezone.utc).isoformat(),
+        "imported_at": now_local.isoformat(),
         "original_text_file": str(request.text_file.resolve()) if request.text_file else None,
         "original_image_files": [str(path.resolve()) for path in request.image_files],
         "archived_text_file": str(archived_text_path.resolve()) if archived_text_path else None,
@@ -65,7 +68,7 @@ def build_manual_post(settings: Settings, request: ManualImportRequest) -> Colle
         url=request.source_url or f"manual://{post_id}",
         title=title,
         author_name=request.author_name,
-        published_at=datetime.now(timezone.utc),
+        published_at=now_local,
         raw_html=None,
         raw_source_text=text_content,
         raw_image_text=None,

@@ -18,3 +18,9 @@ playwright<2.0,>=1.44
 
 [postgres]
 psycopg[binary]<3.3,>=3.1
+
+[web]
+fastapi<1.0,>=0.115
+uvicorn<1.0,>=0.30
+jinja2<4.0,>=3.1
+python-multipart<1.0,>=0.0.9

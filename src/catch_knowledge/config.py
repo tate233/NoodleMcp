@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_base_url: Optional[str] = None
     openai_model: str = "gpt-4.1-mini"
+    openai_backup_api_key: str = ""
+    openai_backup_base_url: Optional[str] = None
+    openai_backup_model: str = ""
     knowledge_base_dir: Path = Path("./knowledge_base")
     raw_archive_dir: Path = Path("./data/raw")
     image_cache_dir: Path = Path("./data/images")
@@ -65,6 +68,10 @@ class Settings(BaseSettings):
 
     llm_retry_count: int = 2
     llm_retry_backoff_seconds: float = 3.0
+    llm_retry_backoff_multiplier: float = 2.0
+    llm_request_timeout_seconds: int = 180
+    llm_queue_retry_delay_seconds: int = 300
+    llm_queue_max_attempts: int = 6
     schedule_cron: str = "0 0 * * *"
     timezone: str = "Asia/Shanghai"
 

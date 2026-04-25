@@ -13,18 +13,22 @@ from .schemas import AnalysisSchema
 
 SYSTEM_PROMPT = """你需要从中文论坛帖子中提取结构化的面经信息。
 只返回 JSON，对象中必须包含以下字段：
-is_interview_experience, company, job_role, job_direction, interview_rounds, tags, interview_questions, question_points, summary, difficulty
+content_type, is_interview_experience, company, job_role, job_direction, interview_rounds, tags, interview_questions, question_points, summary, difficulty
 
 要求：
-1. 如果帖子明显不是面经，is_interview_experience 设为 false。
-2. interview_questions 只提取原文里明确出现的面试题，尽量保留原句，不要脑补，不要扩写，不要根据主题推测题目。
-3. 如果原文没有明确题目，interview_questions 必须返回 []。
-4. question_points 用于提炼更高层的考点或主题，可以比 interview_questions 更概括，但仍然必须基于原文。
-5. interview_rounds 必须返回数组，例如 ["一面"]、["二面", "HR面"]；不要返回单个字符串。
-6. tags 必须返回数组。
-7. summary 用 1 到 2 句话概括帖子内容。
-8. difficulty 使用 easy、medium、hard，或简短中文描述。
-9. 不要输出 markdown 代码块，不要输出解释，只返回 JSON。
+1. content_type 只能是 interview_note、knowledge_snippet、algorithm_snippet、noise 四选一。
+2. 如果是完整面经或较完整的面试记录，content_type 设为 interview_note。
+3. 如果只是零散经验、几条注意点、少量题目总结，更适合直接归入知识点，不适合作为独立面经，content_type 设为 knowledge_snippet。
+4. 如果内容主要是算法题/手撕题/题解，content_type 设为 algorithm_snippet。
+5. 如果明显不是面经相关内容，content_type 设为 noise，同时 is_interview_experience 设为 false。
+6. interview_questions 只提取原文里明确出现的面试题，尽量保留原句，不要脑补，不要扩写，不要根据主题推测题目。
+7. 如果原文没有明确题目，interview_questions 必须返回 []。
+8. question_points 用于提炼更高层的考点或主题，可以比 interview_questions 更概括，但仍然必须基于原文。
+9. interview_rounds 必须返回数组，例如 ["一面"]、["二面", "HR面"]；不要返回单个字符串。
+10. tags 必须返回数组。
+11. summary 用 1 到 2 句话概括帖子内容。
+12. difficulty 使用 easy、medium、hard，或简短中文描述。
+13. 不要输出 markdown 代码块，不要输出解释，只返回 JSON。
 """
 
 
@@ -38,36 +42,51 @@ class LLMAnalyzer:
 
         content = self._build_prompt(title, raw_text)
         last_error = None
-        for attempt in range(self.settings.llm_retry_count + 1):
-            try:
-                client = self._build_client()
-                response = client.chat.completions.create(
-                    model=self.settings.openai_model,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": content},
-                    ],
-                )
-                payload = self._extract_json_text(self._extract_output_text(response))
-                parsed = AnalysisSchema.model_validate(self._normalize_payload(json.loads(payload)))
-                return StructuredAnalysis(
-                    is_interview_experience=parsed.is_interview_experience,
-                    company=parsed.company,
-                    job_role=parsed.job_role,
-                    job_direction=parsed.job_direction,
-                    interview_rounds=parsed.interview_rounds,
-                    tags=parsed.tags,
-                    interview_questions=parsed.interview_questions,
-                    question_points=parsed.question_points,
-                    summary=parsed.summary,
-                    difficulty=parsed.difficulty,
-                    normalized_json=parsed.model_dump(),
-                )
-            except Exception as exc:
-                last_error = exc
-                if attempt >= self.settings.llm_retry_count:
-                    break
-                time.sleep(self.settings.llm_retry_backoff_seconds * (attempt + 1))
+        targets = self._build_llm_targets()
+        for target in targets:
+            for attempt in range(self.settings.llm_retry_count + 1):
+                try:
+                    client = self._build_client(api_key=target["api_key"], base_url=target["base_url"])
+                    response = client.chat.completions.create(
+                        model=target["model"],
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": content},
+                        ],
+                    )
+                    payload = self._extract_json_text(self._extract_output_text(response))
+                    parsed = AnalysisSchema.model_validate(self._normalize_payload(json.loads(payload)))
+                    normalized_payload = parsed.model_dump()
+                    normalized_payload = self._apply_short_text_heuristics(
+                        normalized_payload,
+                        title=title,
+                        raw_text=raw_text,
+                    )
+                    normalized_payload["llm_model_used"] = target["model"]
+                    normalized_payload["llm_base_url_used"] = target["base_url"]
+                    normalized_payload["llm_target_name"] = target["name"]
+                    return StructuredAnalysis(
+                        content_type=normalized_payload["content_type"],
+                        is_interview_experience=normalized_payload["is_interview_experience"],
+                        company=normalized_payload.get("company"),
+                        job_role=normalized_payload.get("job_role"),
+                        job_direction=normalized_payload.get("job_direction"),
+                        interview_rounds=normalized_payload.get("interview_rounds", []),
+                        tags=normalized_payload.get("tags", []),
+                        interview_questions=normalized_payload.get("interview_questions", []),
+                        question_points=normalized_payload.get("question_points", []),
+                        summary=normalized_payload.get("summary"),
+                        difficulty=normalized_payload.get("difficulty"),
+                        normalized_json=normalized_payload,
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    if attempt >= self.settings.llm_retry_count:
+                        break
+                    backoff = self.settings.llm_retry_backoff_seconds * (
+                        self.settings.llm_retry_backoff_multiplier ** attempt
+                    )
+                    time.sleep(backoff)
 
         fallback = self._fallback_analysis(title=title, raw_text=raw_text)
         fallback.normalized_json["llm_error"] = repr(last_error) if last_error else "unknown"
@@ -84,17 +103,18 @@ class LLMAnalyzer:
             }
 
         try:
-            client = self._build_client()
+            target = self._build_llm_targets()[0]
+            client = self._build_client(api_key=target["api_key"], base_url=target["base_url"])
             response = client.chat.completions.create(
-                model=self.settings.openai_model,
+                model=target["model"],
                 messages=[{"role": "user", "content": "reply with OK"}],
                 max_tokens=5,
             )
             output = self._extract_output_text(response)
             return {
                 "ok": True,
-                "base_url": self.settings.openai_base_url,
-                "model": self.settings.openai_model,
+                "base_url": target["base_url"],
+                "model": target["model"],
                 "response": output,
             }
         except Exception as exc:
@@ -116,9 +136,10 @@ class LLMAnalyzer:
             "instruction": "如果 new_question 与某个候选题本质相同或高度相似，返回该候选题 id；否则返回 null。只返回 JSON：{\"match_id\": 123 或 null}",
         }
         try:
-            client = self._build_client()
+            target = self._build_llm_targets()[0]
+            client = self._build_client(api_key=target["api_key"], base_url=target["base_url"])
             response = client.chat.completions.create(
-                model=self.settings.openai_model,
+                model=target["model"],
                 messages=[
                     {"role": "system", "content": "你是面试题去重助手，只判断题目是否本质相同。只返回 JSON。"},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
@@ -148,9 +169,10 @@ class LLMAnalyzer:
             ),
         }
         try:
-            client = self._build_client()
+            target = self._build_llm_targets()[0]
+            client = self._build_client(api_key=target["api_key"], base_url=target["base_url"])
             response = client.chat.completions.create(
-                model=self.settings.openai_model,
+                model=target["model"],
                 messages=[
                     {
                         "role": "system",
@@ -165,13 +187,32 @@ class LLMAnalyzer:
         except Exception:
             return None
 
-    def _build_client(self) -> OpenAI:
+    def _build_client(self, *, api_key: Optional[str], base_url: Optional[str]) -> OpenAI:
         return OpenAI(
-            api_key=(self.settings.openai_api_key or "").strip() or None,
-            base_url=self.settings.openai_base_url or None,
-            timeout=180.0,
+            api_key=(api_key or "").strip() or None,
+            base_url=base_url or None,
+            timeout=float(self.settings.llm_request_timeout_seconds),
             max_retries=0,
         )
+
+    def _build_llm_targets(self) -> list[dict]:
+        primary = {
+            "name": "primary",
+            "api_key": self.settings.openai_api_key,
+            "base_url": self.settings.openai_base_url,
+            "model": self.settings.openai_model,
+        }
+        targets = [primary]
+        if (self.settings.openai_backup_model or "").strip():
+            targets.append(
+                {
+                    "name": "backup",
+                    "api_key": (self.settings.openai_backup_api_key or self.settings.openai_api_key),
+                    "base_url": self.settings.openai_backup_base_url or self.settings.openai_base_url,
+                    "model": self.settings.openai_backup_model,
+                }
+            )
+        return targets
 
     @staticmethod
     def _build_prompt(title: Optional[str], raw_text: Optional[str]) -> str:
@@ -231,6 +272,7 @@ class LLMAnalyzer:
         is_interview = any(keyword in text for keyword in keywords)
         summary = (raw_text or "")[:200] if raw_text else None
         return StructuredAnalysis(
+            content_type=LLMAnalyzer._infer_fallback_content_type(text),
             is_interview_experience=is_interview,
             company=None,
             job_role=None,
@@ -246,3 +288,101 @@ class LLMAnalyzer:
                 "matched_keywords": [keyword for keyword in keywords if keyword in text],
             },
         )
+
+    @classmethod
+    def _apply_short_text_heuristics(cls, payload: dict, title: Optional[str], raw_text: Optional[str]) -> dict:
+        normalized = dict(payload)
+        text = "\n".join(part for part in [title, raw_text] if part).strip()
+        question = cls._extract_single_question(raw_text or title or "")
+        if not question:
+            return normalized
+
+        content_type = str(normalized.get("content_type") or "").strip().lower()
+        is_interview = bool(normalized.get("is_interview_experience"))
+        questions = cls._coerce_list(normalized.get("interview_questions"))
+        points = cls._coerce_list(normalized.get("question_points"))
+
+        if content_type in {"noise", ""} or not is_interview:
+            normalized["content_type"] = "knowledge_snippet"
+            normalized["is_interview_experience"] = True
+
+        if not questions:
+            normalized["interview_questions"] = [question]
+
+        if not points:
+            inferred_points = cls._infer_points_from_question(question)
+            if inferred_points:
+                normalized["question_points"] = inferred_points
+
+        if not normalized.get("summary"):
+            normalized["summary"] = f"记录了一条简短面试问题：{question}"
+
+        return normalized
+
+    @staticmethod
+    def _extract_single_question(text: str) -> Optional[str]:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return None
+        if len(cleaned) > 120:
+            return None
+
+        markers = ["问到", "问了", "怎么", "怎么办", "为什么", "区别", "实现", "如何", "哪些", "原理"]
+        if any(marker in cleaned for marker in markers):
+            return cleaned.strip("：:;；。 ")
+        return None
+
+    @staticmethod
+    def _infer_points_from_question(question: str) -> list[str]:
+        lowered = question.lower()
+        inferred = []
+        mapping = [
+            ("https", "HTTPS"),
+            ("证书", "数字证书"),
+            ("锁", "锁机制"),
+            ("redis", "Redis"),
+            ("mysql", "MySQL"),
+            ("幂等", "幂等性"),
+            ("分布式", "分布式系统"),
+        ]
+        for keyword, point in mapping:
+            if keyword in lowered:
+                inferred.append(point)
+        return inferred
+
+    @staticmethod
+    def _normalize_content_type(value: Optional[str], questions: list[str], is_interview_experience: bool) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {"interview_note", "knowledge_snippet", "algorithm_snippet", "noise"}
+        if normalized in allowed:
+            return normalized
+        if not is_interview_experience:
+            return "noise"
+        return LLMAnalyzer._infer_content_type_from_questions(questions)
+
+    @staticmethod
+    def _infer_content_type_from_questions(questions: list[str]) -> str:
+        if not questions:
+            return "knowledge_snippet"
+        algorithm_hits = 0
+        markers = ["算法", "手撕", "leetcode", "hot100", "二叉树", "链表", "动态规划", "排序", "数组"]
+        for item in questions:
+            text = str(item or "").lower()
+            if any(marker.lower() in text for marker in markers):
+                algorithm_hits += 1
+        if algorithm_hits and algorithm_hits >= max(1, len(questions) // 2):
+            return "algorithm_snippet"
+        if len(questions) >= 4:
+            return "interview_note"
+        return "knowledge_snippet"
+
+    @staticmethod
+    def _infer_fallback_content_type(text: str) -> str:
+        lowered = str(text or "").lower()
+        if not lowered.strip():
+            return "noise"
+        if any(keyword in lowered for keyword in ["算法", "手撕", "leetcode", "hot100"]):
+            return "algorithm_snippet"
+        if any(keyword in lowered for keyword in ["面经", "一面", "二面", "三面", "hr面", "oc"]):
+            return "interview_note"
+        return "knowledge_snippet"
