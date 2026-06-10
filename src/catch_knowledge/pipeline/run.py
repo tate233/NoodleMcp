@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from catch_knowledge.config import Settings
 from catch_knowledge.db import create_session_factory, create_tables
-from catch_knowledge.db.models import PostAnalysis, RawPost, TaxonomySuggestion
+from catch_knowledge.db.models import KBDocument, PostAnalysis, RawPost, TaxonomySuggestion
 from catch_knowledge.domain import CollectedPost
 from catch_knowledge.exporters import MarkdownExporter
 from catch_knowledge.indexing import QuestionIndexBuilder
@@ -231,6 +231,74 @@ def sync_incremental_outputs(settings: Settings, raw_post_ids: list[int]) -> dic
             "company_pages": export_stats.get("company_pages", 0),
             "exported": export_stats.get("note_pages", 0),
         }
+
+
+def delete_post_incremental(settings: Settings, raw_post_id: int) -> dict:
+    create_tables(settings)
+    session_factory = create_session_factory(settings)
+    analyzer = LLMAnalyzer(settings)
+    builder = QuestionIndexBuilder(analyzer)
+    exporter = MarkdownExporter(settings)
+
+    with session_factory() as session:
+        session: Session
+        raw_post = session.get(RawPost, raw_post_id)
+        if raw_post is None:
+            raise ValueError("raw post not found")
+
+        analysis = session.query(PostAnalysis).filter(PostAnalysis.raw_post_id == raw_post.id).one_or_none()
+        kb_document = session.query(KBDocument).filter(KBDocument.raw_post_id == raw_post.id).one_or_none()
+
+        affected_companies = set()
+        affected_points = set()
+        affected_algorithm = False
+
+        if kb_document and kb_document.markdown_path:
+            old_company = exporter._extract_company_from_path(kb_document.markdown_path)
+            if old_company:
+                affected_companies.add(old_company)
+
+        if analysis:
+            company = exporter._clean_name(analysis.company)
+            if company:
+                affected_companies.add(company)
+            for point in analysis.question_points or []:
+                clean_point = exporter._clean_name(point)
+                if clean_point:
+                    affected_points.add(clean_point)
+            if exporter._extract_algorithm_questions(analysis.interview_questions or []):
+                affected_algorithm = True
+
+        affected_points.update(exporter._canonical_points_for_post(session, raw_post.id))
+        if exporter._has_algorithm_entry_for_post(session, raw_post.id):
+            affected_algorithm = True
+
+        if kb_document is not None:
+            exporter._unlink_file(Path(kb_document.markdown_path))
+            session.delete(kb_document)
+        if analysis is not None:
+            session.delete(analysis)
+        session.delete(raw_post)
+        session.flush()
+
+        index_stats = builder.sync_posts(session, [raw_post_id])
+        export_stats = exporter.sync_deleted_posts(
+            session,
+            [raw_post_id],
+            affected_companies=sorted(affected_companies),
+            affected_points=sorted(affected_points),
+            affected_algorithm=affected_algorithm,
+        )
+        session.commit()
+
+    return {
+        "deleted": 1,
+        "canonical_questions": index_stats.get("canonical_questions", 0),
+        "knowledge_point_pages": export_stats.get("knowledge_point_pages", 0),
+        "algorithm_pages": export_stats.get("algorithm_pages", 0),
+        "company_pages": export_stats.get("company_pages", 0),
+        "exported": export_stats.get("note_pages", 0),
+    }
 
 
 def build_question_index(settings: Settings) -> dict:

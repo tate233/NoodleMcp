@@ -1,6 +1,7 @@
 from .run import (
     analyze_raw_posts,
     build_question_index,
+    delete_post_incremental,
     export_obsidian_vault,
     import_manual_note,
     list_taxonomy_suggestions,
@@ -10,12 +11,14 @@ from .run import (
     process_llm_retry_queue,
     rerun_ocr_posts,
     run_pipeline,
+    sync_incremental_outputs,
 )
 
 __all__ = [
     "run_pipeline",
     "analyze_raw_posts",
     "build_question_index",
+    "delete_post_incremental",
     "export_obsidian_vault",
     "import_manual_note",
     "list_taxonomy_suggestions",
@@ -24,4 +27,5 @@ __all__ = [
     "reanalyze_single_post",
     "process_llm_retry_queue",
     "rerun_ocr_posts",
+    "sync_incremental_outputs",
 ]

@@ -10,7 +10,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from catch_knowledge.config import Settings
-from catch_knowledge.db.models import CanonicalQuestion, PostAnalysis, RawPost
+from catch_knowledge.db.models import CanonicalQuestion, KBDocument, PostAnalysis, RawPost
 
 
 class MarkdownExporter:
@@ -155,6 +155,61 @@ class MarkdownExporter:
         self._export_home_index(all_rows, knowledge_points, algorithms)
         stats["index_pages"] = 1
 
+        return stats
+
+    def sync_deleted_posts(
+        self,
+        session: Session,
+        raw_post_ids: List[int],
+        *,
+        affected_companies: List[str] | None = None,
+        affected_points: List[str] | None = None,
+        affected_algorithm: bool = False,
+    ) -> dict:
+        impacted_ids = {int(raw_post_id) for raw_post_id in raw_post_ids}
+        if not impacted_ids:
+            return {"note_pages": 0, "company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+
+        stats = {"note_pages": 0, "company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+        company_targets = {self._clean_name(company) for company in (affected_companies or []) if self._clean_name(company)}
+        point_targets = {self._clean_name(point) for point in (affected_points or []) if self._clean_name(point)}
+        algorithm_target = bool(affected_algorithm)
+
+        for raw_post_id in impacted_ids:
+            point_targets.update(self._canonical_points_for_post(session, raw_post_id))
+            if self._has_algorithm_entry_for_post(session, raw_post_id):
+                algorithm_target = True
+
+        company_pages = 0
+        for company in sorted(company_targets):
+            if self._sync_company_page(session, company):
+                company_pages += 1
+        stats["company_pages"] = company_pages
+
+        knowledge_point_pages = 0
+        for point in sorted(point_targets):
+            if self._sync_knowledge_point_page(session, point):
+                knowledge_point_pages += 1
+        stats["knowledge_point_pages"] = knowledge_point_pages
+
+        if algorithm_target:
+            self._sync_algorithm_page(session)
+            stats["algorithm_pages"] = 1
+
+        all_rows = (
+            session.query(RawPost, PostAnalysis)
+            .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
+            .filter(
+                PostAnalysis.is_interview_experience.is_(True),
+                or_(PostAnalysis.content_type == "interview_note", PostAnalysis.content_type.is_(None)),
+            )
+            .order_by(RawPost.id.asc())
+            .all()
+        )
+        knowledge_points = self._current_knowledge_point_counts(session)
+        algorithms = self._current_algorithm_counts(session)
+        self._export_home_index(all_rows, knowledge_points, algorithms)
+        stats["index_pages"] = 1
         return stats
 
     def _clear_generated_vault(self) -> None:

@@ -22,9 +22,11 @@ from catch_knowledge.exporters import MarkdownExporter
 from catch_knowledge.llm import LLMAnalyzer
 from catch_knowledge.pipeline import (
     build_question_index,
+    delete_post_incremental as pipeline_delete_post_incremental,
     export_obsidian_vault,
     import_manual_note,
     reanalyze_single_post as pipeline_reanalyze_single_post,
+    sync_incremental_outputs as pipeline_sync_incremental_outputs,
 )
 from catch_knowledge.storage import save_analysis
 
@@ -203,7 +205,6 @@ def post_detail(request: Request, raw_post_id: int):
 def action_reanalyze_post(raw_post_id: int):
     try:
         result = _reanalyze_single_post(raw_post_id)
-        _refresh_knowledge_outputs()
         if result.get("status") == "analysis_fallback":
             _schedule_background_reanalyze(raw_post_id)
             detail = result.get("llm_error") or "LLM 本次仍未返回结构化结果"
@@ -224,7 +225,7 @@ def action_reanalyze_post(raw_post_id: int):
 def action_update_content_type(raw_post_id: int, content_type: str = Form(...)):
     try:
         _update_single_content_type(raw_post_id, content_type)
-        _refresh_knowledge_outputs()
+        _sync_incremental_outputs([raw_post_id])
         return _redirect(f"/posts/{raw_post_id}", "内容类型已更新", "success")
     except Exception as exc:
         return _redirect(f"/posts/{raw_post_id}", f"更新内容类型失败：{exc}", "error")
@@ -256,7 +257,7 @@ def action_edit_post(
             question_points=question_points,
             content_type=content_type,
         )
-        _refresh_knowledge_outputs()
+        _sync_incremental_outputs([raw_post_id])
         return _redirect(f"/posts/{raw_post_id}", "内容已更新", "success")
     except Exception as exc:
         return _redirect(f"/posts/{raw_post_id}", f"保存修改失败：{exc}", "error")
@@ -265,8 +266,7 @@ def action_edit_post(
 @app.post("/posts/{raw_post_id}/delete")
 def action_delete_post(raw_post_id: int):
     try:
-        _delete_single_post(raw_post_id)
-        _refresh_knowledge_outputs()
+        pipeline_delete_post_incremental(settings, raw_post_id)
         return _redirect("/", "面经已删除", "success")
     except Exception as exc:
         return _redirect(f"/posts/{raw_post_id}", f"删除失败：{exc}", "error")
@@ -305,13 +305,16 @@ def _refresh_knowledge_outputs() -> None:
     export_obsidian_vault(settings)
 
 
+def _sync_incremental_outputs(raw_post_ids: list[int]) -> None:
+    pipeline_sync_incremental_outputs(settings, raw_post_ids)
+
+
 def _schedule_background_reanalyze(raw_post_id: int, attempts: int = 2, delay_seconds: int = 6) -> None:
     def _worker() -> None:
         for _ in range(max(1, attempts)):
             try:
                 result = pipeline_reanalyze_single_post(settings, raw_post_id)
                 if result.get("status") != "analysis_fallback":
-                    _refresh_knowledge_outputs()
                     return
             except Exception:
                 return

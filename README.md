@@ -1,179 +1,350 @@
 # Catch Knowledge
 
-一个面向个人使用的面经知识库工具：从内容源采集帖子，保存原始数据，调用 OCR 和大模型做结构化分析，并导出成可检索的知识库内容。
+Catch Knowledge 是一个个人面经知识库系统。它负责从小红书、手动上传、QQ 私聊等入口收集面经材料，经过 OCR 和 LLM 结构化分析后写入数据库，并导出成 Obsidian 可直接打开的 Markdown 知识库。
 
-## 当前状态
+项目定位不是一个完整社交产品，而是一个长期自动运行的“面经采集与整理 Agent”：每天抓取、手动补充、自动清洗、自动归类、自动沉淀到知识库。
 
-当前基础链路已经打通：
+## 当前链路
 
-- 使用 `xiaohongshu-mcp` 抓取帖子
-- 原始帖子先入库
-- 保存图片链接
-- 调用火山 OCR 提取图片文字
-- 将“正文 + OCR 文本”一起交给 LLM
-- 提取面试题、考点、公司、岗位、轮次等结构化字段
-- 导出 Markdown 知识库
+主链路如下：
 
-当前开发期默认使用 `SQLite`，正式部署目标是切换到 `PostgreSQL`。
+1. 内容入口接收原始材料。
+2. 原始帖子先写入 `raw_posts`。
+3. 如果有图片，保存图片链接或本地上传图片。
+4. OCR 识别图片文字，写入 `raw_image_text`。
+5. 合并正文和 OCR 文本，生成 `raw_text`。
+6. LLM 分析 `raw_text`，提取公司、岗位、题目、知识点、算法题、摘要等结构化字段。
+7. 分析结果写入 `post_analysis`。
+8. 构建或增量更新 `canonical_questions`，用于题目归并、知识点聚合和频次统计。
+9. 导出到 `knowledge_base/`，用 Obsidian 打开阅读。
 
-## 当前能力
+当前支持三种入口：
 
-- 支持 `xiaohongshu-mcp` 作为内容源
-- 支持原始帖子、OCR 文本、结构化分析结果入库
-- 支持 `rerun-ocr` 补跑图片 OCR
-- 支持 `reanalyze-fallback` 补跑 LLM fallback 记录
-- 支持 `reanalyze-missing-questions` 补跑题目为空的记录
-- 支持构建 `canonical_questions` 题目索引，用于按知识点/算法题统计频次和来源
-- 支持导出 Markdown 知识库
-- 支持切换数据库到 PostgreSQL
+- 小红书自动抓取：`xiaohongshu-mcp` + `run-once` 或 `schedule`
+- 手动上传：Web 控制台或 `manual-import`
+- QQ 私聊上传：NapCat + `qq-adapter`
 
-## 当前数据流
+## 核心目录
 
-1. 启动 `xiaohongshu-mcp`
-2. 用关键词搜索候选帖子
-3. 拉取帖子详情并写入 `raw_posts`
-4. 保存图片链接到数据库
-5. 下载图片并调用火山 OCR
-6. 将 OCR 文本并入 `raw_text`
-7. 调用 LLM 提取结构化信息，写入 `post_analysis`
-8. 构建题目索引 `canonical_questions`
-9. 导出到 `knowledge_base/`
+```text
+catch_knowledge/
+  src/catch_knowledge/
+    adapters/          QQ/NapCat 等外部入口适配
+    exporters/         Markdown/Obsidian 导出
+    indexing/          题目归并与知识点索引
+    llm/               LLM 分析
+    ocr/               OCR 识别
+    pipeline/          主处理流程
+    sources/           小红书、牛客等内容源
+    web/               Web 控制台
+  data/                本地数据、上传文件、缓存
+  knowledge_base/      Obsidian Markdown 知识库
+  xiaohongshu-mcp/     小红书 MCP 子模块
+  docker-compose.yml   PostgreSQL 容器
+```
 
 ## 主要数据表
 
 ### `raw_posts`
 
-- 原始帖子数据
-- 原帖正文 `raw_source_text`
-- OCR 文本 `raw_image_text`
-- 合并后的分析输入 `raw_text`
-- 图片链接 `image_urls`
+保存原始材料：
+
+- `raw_source_text`：原始正文
+- `raw_image_text`：OCR 识别出的图片文字
+- `raw_text`：正文和 OCR 文本合并后的 LLM 输入
+- `image_urls`：图片链接
+- `status`：处理状态
 
 ### `post_analysis`
 
-- `company`
-- `job_role`
-- `job_direction`
-- `interview_rounds`
-- `tags`
-- `interview_questions`
-- `question_points`
-- `summary`
-- `normalized_json`
+保存 LLM 分析结果：
 
-### `kb_documents`
-
-- 导出的 Markdown 文档路径
+- `content_type`：内容类型，例如 `interview_note`、`knowledge_snippet`、`algorithm_snippet`
+- `company`：公司
+- `job_role`：岗位
+- `job_direction`：方向
+- `interview_rounds`：轮次
+- `interview_questions`：面试题
+- `question_points`：知识点
+- `summary`：摘要
+- `normalized_json`：完整结构化结果、fallback 信息、LLM 错误信息
 
 ### `canonical_questions`
 
-- 归并后的题目文本 `canonical_text`
-- 题目类型 `kind`，当前包含 `interview` 和 `algorithm`
-- 所属知识点 `knowledge_point`
-- 出现频次 `frequency`
-- 来源面经 ID `source_raw_post_ids`
-- 原始题目变体 `variants`
+保存归并后的题目索引：
 
-## 常用命令
+- `kind`：`interview` 或 `algorithm`
+- `knowledge_point`：所属知识点
+- `canonical_text`：归并后的标准题目
+- `frequency`：出现频次
+- `source_raw_post_ids`：来源记录 ID
+- `variants`：原始题目变体和细分考点
 
-### 抓取与分析
+### `kb_documents`
+
+保存已经导出的 Obsidian 单篇面经路径。
+
+## 环境准备
+
+推荐 Python 3.9 或更高版本。当前项目本机测试主要使用 Python 3.9。
+
+安装基础依赖：
+
+```powershell
+pip install -e .
+```
+
+如果使用 Web 控制台、QQ 适配器、PostgreSQL：
+
+```powershell
+pip install -e .[web,postgres]
+```
+
+如果需要开发测试：
+
+```powershell
+pip install -e .[dev,web,postgres]
+```
+
+## 配置 `.env`
+
+先复制示例配置：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+部署推荐使用 PostgreSQL：
+
+```env
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/catch_knowledge
+```
+
+LLM 配置：
+
+```env
+OPENAI_API_KEY=你的主模型 API Key
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+OPENAI_MODEL=deepseek-ai/DeepSeek-V3
+
+OPENAI_BACKUP_API_KEY=你的备用模型 API Key
+OPENAI_BACKUP_BASE_URL=https://api.moonshot.cn/v1
+OPENAI_BACKUP_MODEL=kimi-k2-0711-preview
+
+LLM_RETRY_COUNT=2
+LLM_RETRY_BACKOFF_SECONDS=3
+LLM_RETRY_BACKOFF_MULTIPLIER=2
+LLM_REQUEST_TIMEOUT_SECONDS=180
+LLM_QUEUE_RETRY_DELAY_SECONDS=300
+LLM_QUEUE_MAX_ATTEMPTS=6
+```
+
+火山 OCR 配置：
+
+```env
+OCR_ENABLED=true
+OCR_PROVIDER=volcengine
+OCR_DOWNLOAD_TIMEOUT_SECONDS=30
+OCR_MAX_IMAGES_PER_POST=9
+
+VOLCENGINE_OCR_AK=你的 AK
+VOLCENGINE_OCR_SK=你的 SK
+VOLCENGINE_OCR_ENDPOINT=https://visual.volcengineapi.com
+VOLCENGINE_OCR_REGION=cn-north-1
+VOLCENGINE_OCR_SERVICE=cv
+VOLCENGINE_OCR_SCENE=general
+VOLCENGINE_OCR_MODE=default
+VOLCENGINE_OCR_FILTER_THRESH=80
+VOLCENGINE_OCR_HALF_TO_FULL=false
+```
+
+小红书 MCP 配置：
+
+```env
+SOURCE_PLATFORM=xiaohongshu_mcp
+XHS_MCP_BASE_URL=http://127.0.0.1:18060
+XHS_KEYWORDS=后端 面经
+XHS_SEARCH_SORT_BY=最新
+XHS_SEARCH_PUBLISH_TIME=一天内
+XHS_MAX_RESULTS_PER_KEYWORD=10
+XHS_MIN_DELAY_SECONDS=10
+XHS_MAX_DELAY_SECONDS=15
+```
+
+定时任务配置：
+
+```env
+SCHEDULE_CRON=0 0 * * *
+TIMEZONE=Asia/Shanghai
+```
+
+## 本地启动 PostgreSQL
+
+项目已经提供 `docker-compose.yml`。本机或服务器安装 Docker 后执行：
+
+```powershell
+docker compose up -d
+```
+
+检查容器：
+
+```powershell
+docker compose ps
+```
+
+初始化数据库表：
+
+```powershell
+python -m catch_knowledge.cli init-db
+```
+
+如果之前有 SQLite 数据，可以迁移到当前 `DATABASE_URL`：
+
+```powershell
+python -m catch_knowledge.cli migrate-sqlite-to-db --sqlite-path ./data/catch_knowledge.db
+```
+
+## 小红书 MCP 启动
+
+进入子模块目录：
+
+```powershell
+cd .\xiaohongshu-mcp
+go run . -headless=false
+```
+
+回到项目根目录检查登录状态：
+
+```powershell
+python -m catch_knowledge.cli xhs-mcp-status
+```
+
+如果未登录，可以获取二维码：
+
+```powershell
+python -m catch_knowledge.cli xhs-mcp-qrcode
+```
+
+登录成功后可以预览搜索结果：
+
+```powershell
+python -m catch_knowledge.cli xhs-search
+```
+
+执行一次完整抓取：
 
 ```powershell
 python -m catch_knowledge.cli run-once
 ```
 
-执行一次完整流程：抓取、OCR、入库、LLM 分析、导出。
+`run-once` 会执行：
 
-### 补跑 OCR
+1. 从小红书 MCP 搜索候选帖子。
+2. 拉取帖子详情。
+3. 原始数据入库。
+4. OCR 识别图片。
+5. LLM 结构化分析。
+6. 增量更新题目索引。
+7. 增量导出 Obsidian。
 
-```powershell
-python -m catch_knowledge.cli rerun-ocr
-```
+## Web 控制台
 
-只处理“有图片链接但 `raw_image_text` 为空”的记录。
-
-### 手动导入面经
-
-支持本地文本、Markdown、图片混合导入，导入后会自动走 OCR、LLM 分析、题目索引重建和 Obsidian 导出：
-
-```powershell
-python -m catch_knowledge.cli manual-import --text-file .\example.md --image .\1.png --image .\2.png --title "字节后端二面"
-```
-
-也支持直接传纯文本：
+启动 Web 控制台：
 
 ```powershell
-python -m catch_knowledge.cli manual-import --text "这里直接粘贴面经正文" --title "手动上传面经"
-```
-
-### Web 操作台
-
-如果你不想每次都走 CLI，可以启动一个轻量 Web 操作台，用来上传材料、查看最近记录，并一键触发索引重建和 Obsidian 导出：
-
-```powershell
-pip install -e .[web]
 python -m catch_knowledge.cli web --host 127.0.0.1 --port 8000
 ```
 
-默认打开：
+打开：
 
 ```text
 http://127.0.0.1:8000
 ```
 
-这个 Web 入口负责“上传和触发处理”，知识库阅读和精修仍然建议放在 Obsidian 里完成。
+Web 控制台主要用于：
 
-### QQ 接入（NapCat）
+- 手动上传面经文本
+- 手动上传图片并走 OCR
+- 查看最近记录
+- 查看 LLM 错误和 fallback 原因
+- 单条重新分析
+- 编辑记录
+- 删除记录
+- 手动触发全量索引和全量导出
 
-如果你想直接通过 QQ 私聊把文字或截图投喂进系统，推荐用 `NapCatQQ + 本项目自带 qq-adapter`：
+常规上传、编辑、删除、重新分析都会走增量同步。只有控制台里的全量按钮才会重新构建全量知识库。
 
-1. 先启动主 Web 服务
+## 手动导入
+
+直接传文字：
+
+```powershell
+python -m catch_knowledge.cli manual-import --title "字节后端二面" --text "这里粘贴面经正文"
+```
+
+传文本文件：
+
+```powershell
+python -m catch_knowledge.cli manual-import --title "美团一面" --text-file .\example.md
+```
+
+传图片：
+
+```powershell
+python -m catch_knowledge.cli manual-import --title "截图面经" --image .\1.png --image .\2.png
+```
+
+图文混合：
+
+```powershell
+python -m catch_knowledge.cli manual-import --title "京东一面" --text "补充说明" --image .\1.png
+```
+
+## QQ 私聊上传
+
+QQ 接入使用 NapCat。推荐在服务器上使用 HTTP Client 上报到 `qq-adapter`，并配置 token。
+
+启动主 Web 服务：
 
 ```powershell
 python -m catch_knowledge.cli web --host 127.0.0.1 --port 8000
 ```
 
-2. 再启动 QQ adapter
+启动 QQ adapter：
 
 ```powershell
-python -m catch_knowledge.cli qq-adapter --host 127.0.0.1 --port 8090 --ingest-base-url http://127.0.0.1:8000 --napcat-api-base-url http://127.0.0.1:3000
+python -m catch_knowledge.cli qq-adapter `
+  --host 127.0.0.1 `
+  --port 8090 `
+  --ingest-base-url http://127.0.0.1:8000 `
+  --napcat-api-base-url http://127.0.0.1:3000 `
+  --napcat-access-token 你的_NapCat_HTTP_Server_Token `
+  --webhook-secret 你的_Webhook_Token
 ```
 
-3. 在 NapCat 里把私聊消息事件上报到：
+NapCat 里配置 HTTP Client：
 
 ```text
-http://127.0.0.1:8090/qq/webhook
+URL: http://127.0.0.1:8090/qq/webhook
+Authorization: Bearer 你的_Webhook_Token
+消息格式: Array
 ```
 
-4. 之后你给这个 QQ 号发：
-- 纯文字
-- 图片
-- 图文混合
-
-adapter 会自动转发给：
-- `POST /api/ingest/text`
-- 或 `POST /api/ingest/message`
-
-然后由主系统完成：
-- OCR
-- LLM 分析
-- 入库
-- 题目索引重建
-- Obsidian 导出
-
-如果配置了 NapCat API 地址，adapter 还会自动给你回一条简短结果，比如：
+NapCat HTTP Server 如果设置了 token，`qq-adapter` 调用 NapCat 发回复和取图片时需要传：
 
 ```text
-已收录
-类型：knowledge_snippet
-状态：processed
-题目：问到https，问了证书伪造怎么办
-记录ID：22
+--napcat-access-token 你的_NapCat_HTTP_Server_Token
 ```
 
-### 对话入口用的最小上传 API
+之后给这个 QQ 号发私聊即可：
 
-为了后续接微信 / QQ，这个 Web 服务现在也提供了最小上传 API。聊天侧只需要把文字和图片转发到这里，不需要直接调用 CLI。
+- 纯文字面经
+- 图片截图
+- 图文混合内容
+
+QQ adapter 会把内容转发到 Web API，然后自动走 OCR、LLM、入库和 Obsidian 增量同步。
+
+## Web API
 
 健康检查：
 
@@ -192,14 +363,14 @@ Content-Type: application/json
 
 ```json
 {
-  "title": "问到https，问了证书伪造怎么办",
-  "text": "问到https，问了证书伪造怎么办",
-  "source": "wechat",
+  "title": "问到 HTTPS 证书伪造怎么办",
+  "text": "问到 HTTPS，问了证书伪造怎么办",
+  "source": "qq",
   "sender": "tate"
 }
 ```
 
-文本 + 图片混合上传：
+图文混合上传：
 
 ```text
 POST /api/ingest/message
@@ -214,261 +385,330 @@ Content-Type: multipart/form-data
 - `author`
 - `source`
 - `sender`
-- `files`（可多文件，支持 txt/md/图片）
+- `files`
 
-返回结果会带：
+## Obsidian 知识库
 
-- `raw_post_id`
-- `status`
-- `content_type`
-- `interview_questions`
-- `question_points`
-- `summary`
+导出目录：
 
-这样微信 / QQ adapter 只要做一件事：
-
-1. 收消息
-2. 把文字和附件转发到 `/api/ingest/message`
-3. 把返回结果回显给你
-
-### 补跑 LLM fallback
-
-```powershell
-python -m catch_knowledge.cli reanalyze-fallback
+```text
+knowledge_base/
 ```
 
-只处理之前因为 LLM 网络或模型问题而走 fallback 的记录。
+用 Obsidian 打开 `knowledge_base/` 作为 Vault。
 
-### 补跑题目为空的记录
+当前导出结构：
 
-```powershell
-python -m catch_knowledge.cli reanalyze-missing-questions
+```text
+knowledge_base/
+  面经/
+    公司名/
+      单篇面经.md
+  公司/
+    公司名.md
+  面试题/
+    知识点.md
+  算法题/
+    算法题.md
+  面经知识库.md
 ```
 
-### 检查模型连通性
-
-```powershell
-python -m catch_knowledge.cli llm-check
-```
-
-### 初始化当前数据库
-
-```powershell
-python -m catch_knowledge.cli init-db
-```
-
-### 把 SQLite 数据迁移到当前数据库
-
-```powershell
-python -m catch_knowledge.cli migrate-sqlite-to-db --sqlite-path ./data/catch_knowledge.db
-```
-
-这个命令适合你后面切到 PostgreSQL 时使用。
-
-### 导出 Obsidian 知识库
-
-建议先构建题目索引，再导出 Obsidian：
+日常使用时，上传和自动抓取会增量更新知识库。只有需要彻底重算时才手动执行：
 
 ```powershell
 python -m catch_knowledge.cli build-question-index
-```
-
-这个命令会按知识点局部归并题目，并记录频次和来源。目前默认使用快速规则归并，避免每次把全量题目塞给 LLM。
-
-当题目落入 `未分类` 时，系统还会额外记录一个受控扩展建议，不会直接修改主 taxonomy。你可以用下面的命令查看候选目录：
-
-```powershell
-python -m catch_knowledge.cli list-taxonomy-suggestions
-```
-
-题目索引采用固定一级 taxonomy 作为目录骨架，LLM 抽取出的细考点会保存在题目变体里作为子标签。当前一级目录包括：
-
-- `Java基础`
-- `Java并发`
-- `JVM`
-- `Spring`
-- `MySQL`
-- `Redis`
-- `消息队列`
-- `计算机网络`
-- `操作系统`
-- `分布式系统`
-- `系统设计`
-- `项目经历`
-- `算法题`
-- `AI/RAG`
-- `工程实践`
-- `HR/行为面`
-- `未分类`
-
-```powershell
 python -m catch_knowledge.cli export-obsidian
 ```
 
-这个命令会基于当前数据库生成 Obsidian 友好的 Markdown 目录结构：
-
-- `knowledge_base/面经/公司名/单篇面经.md`
-- `knowledge_base/公司/公司名.md`
-- `knowledge_base/面试题/知识点.md`
-- `knowledge_base/算法题/算法题.md`
-- `knowledge_base/面经知识库.md`
-
-在 Obsidian 中直接选择 `knowledge_base/` 作为 Vault 打开，然后从 `面经知识库.md` 进入即可。
-
-### 同步 Obsidian 手动修改
-
-如果你在 Obsidian 里修改了单篇面经内容，可以把修改同步回数据库：
+如果在 Obsidian 里改了单篇面经，可以同步回数据库：
 
 ```powershell
 python -m catch_knowledge.cli sync-obsidian
 ```
 
-第一版只同步 `knowledge_base/面经/**/*.md`，不会读取公司页、面试题页、算法题页这些自动索引页。支持同步的内容包括：
+注意：`sync-obsidian` 只同步单篇面经，不同步公司页、面试题页、算法题页这些自动生成的聚合页。
 
-- frontmatter 里的 `company`、`role`、`direction`、`rounds`、`tags`
-- `## 面试题`
-- `## 知识点`
-- `## 摘要`
-- `## 原文`
-- `## 图片 OCR`
+## LLM 与 OCR 补跑
 
-同步依赖单篇面经 frontmatter 里的 `raw_post_id`。如果旧文件没有这个字段，先重新执行一次 `export-obsidian`。
-
-## PostgreSQL 切换方案
-
-现在本机还没装 PostgreSQL 也没关系，项目已经先准备好了切换能力。
-
-建议顺序：
-
-1. 先在本机或服务器装 PostgreSQL
-2. 修改 `.env` 里的 `DATABASE_URL`
-3. 执行 `init-db`
-4. 如需保留旧数据，执行 `migrate-sqlite-to-db`
-
-### PostgreSQL 依赖
+检查 LLM 连通性：
 
 ```powershell
-pip install -e .[postgres]
+python -m catch_knowledge.cli llm-check
 ```
 
-### PostgreSQL 连接串示例
-
-```env
-DATABASE_URL=postgresql+psycopg://postgres:your_password@localhost:5432/catch_knowledge
-```
-
-### 切换步骤
-
-1. 安装 PostgreSQL
-2. 新建数据库，例如 `catch_knowledge`
-3. 安装 Python 驱动：
+补跑 LLM fallback 记录：
 
 ```powershell
-pip install -e .[postgres]
+python -m catch_knowledge.cli reanalyze-fallback
 ```
 
-4. 修改 `.env`
-5. 初始化表：
+处理 LLM 后台重试队列：
 
 ```powershell
+python -m catch_knowledge.cli process-llm-retry-queue --limit 20
+```
+
+补跑题目为空的记录：
+
+```powershell
+python -m catch_knowledge.cli reanalyze-missing-questions
+```
+
+补跑 OCR：
+
+```powershell
+python -m catch_knowledge.cli rerun-ocr
+```
+
+## 定时任务
+
+使用内置 scheduler：
+
+```powershell
+python -m catch_knowledge.cli schedule
+```
+
+它会根据 `.env` 里的 `SCHEDULE_CRON` 执行 `run-once`。
+
+也可以用系统级定时任务，例如 Linux crontab：
+
+```cron
+0 0 * * * cd /opt/catch_knowledge && /opt/catch_knowledge/.venv/bin/python -m catch_knowledge.cli run-once >> /opt/catch_knowledge/logs/run-once.log 2>&1
+*/10 * * * * cd /opt/catch_knowledge && /opt/catch_knowledge/.venv/bin/python -m catch_knowledge.cli process-llm-retry-queue --limit 20 >> /opt/catch_knowledge/logs/llm-retry.log 2>&1
+```
+
+## 服务器部署建议
+
+推荐服务器上长期运行这些组件：
+
+- PostgreSQL：Docker Compose
+- Web 控制台：`python -m catch_knowledge.cli web`
+- QQ adapter：`python -m catch_knowledge.cli qq-adapter`
+- NapCat：登录 QQ 并上报私聊消息
+- xiaohongshu-mcp：保持登录态，用于每日抓取
+- 定时任务：`schedule` 或系统 crontab
+
+推荐端口：
+
+```text
+PostgreSQL:       127.0.0.1:5432
+Web 控制台:       127.0.0.1:8000
+QQ adapter:       127.0.0.1:8090
+NapCat HTTP API:  127.0.0.1:3000
+xiaohongshu-mcp:  127.0.0.1:18060
+```
+
+如果只自己使用，最稳妥的方式是：
+
+1. 所有服务只监听 `127.0.0.1`。
+2. 通过 SSH 隧道访问 Web 控制台。
+3. 不把 NapCat、PostgreSQL、xhs-mcp 直接暴露到公网。
+
+SSH 隧道示例：
+
+```powershell
+ssh -L 8000:127.0.0.1:8000 user@your-server
+```
+
+然后本机打开：
+
+```text
+http://127.0.0.1:8000
+```
+
+如果必须公网访问 Web 控制台，建议使用 Nginx 反代并加 HTTPS、Basic Auth 或其他鉴权。不要把 NapCat HTTP API、PostgreSQL、xiaohongshu-mcp 直接暴露到公网。
+
+## NapCat 公网安全
+
+如果 NapCat 和 Catch Knowledge 都部署在同一台服务器，推荐全部使用本机地址：
+
+```text
+NapCat -> QQ adapter: http://127.0.0.1:8090/qq/webhook
+QQ adapter -> Web:   http://127.0.0.1:8000
+QQ adapter -> NapCat:http://127.0.0.1:3000
+```
+
+需要配置两类 token：
+
+1. NapCat HTTP Server token
+
+用于保护 NapCat API，例如发消息、取图片。
+
+`qq-adapter` 启动时传：
+
+```powershell
+--napcat-access-token 你的_NapCat_HTTP_Server_Token
+```
+
+2. QQ adapter webhook token
+
+用于保护 `POST /qq/webhook`，防止别人伪造请求往你的系统塞数据。
+
+`qq-adapter` 启动时传：
+
+```powershell
+--webhook-secret 你的_Webhook_Token
+```
+
+NapCat HTTP Client 请求头设置：
+
+```text
+Authorization: Bearer 你的_Webhook_Token
+```
+
+如果不走公网，并且所有服务都绑定 `127.0.0.1`，安全风险会小很多。但部署到服务器后，仍然建议配置 token。
+
+## 推荐部署步骤
+
+以下以 Linux 服务器为例。
+
+1. 拉取代码
+
+```bash
+git clone https://github.com/tate233/NoodleMcp.git catch_knowledge
+cd catch_knowledge
+```
+
+2. 准备 Python 虚拟环境
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -e ".[web,postgres]"
+```
+
+3. 准备 `.env`
+
+```bash
+cp .env.example .env
+```
+
+然后填写：
+
+- `DATABASE_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_MODEL`
+- `OPENAI_BACKUP_API_KEY`
+- `OPENAI_BACKUP_BASE_URL`
+- `OPENAI_BACKUP_MODEL`
+- `VOLCENGINE_OCR_AK`
+- `VOLCENGINE_OCR_SK`
+- `XHS_MCP_BASE_URL`
+- `SCHEDULE_CRON`
+
+4. 启动 PostgreSQL
+
+```bash
+docker compose up -d
 python -m catch_knowledge.cli init-db
 ```
 
-6. 如需迁移旧 SQLite 数据：
+5. 启动 Web 控制台
+
+```bash
+python -m catch_knowledge.cli web --host 127.0.0.1 --port 8000
+```
+
+6. 启动 QQ adapter
+
+```bash
+python -m catch_knowledge.cli qq-adapter \
+  --host 127.0.0.1 \
+  --port 8090 \
+  --ingest-base-url http://127.0.0.1:8000 \
+  --napcat-api-base-url http://127.0.0.1:3000 \
+  --napcat-access-token 你的_NapCat_HTTP_Server_Token \
+  --webhook-secret 你的_Webhook_Token
+```
+
+7. 启动小红书 MCP
+
+```bash
+cd xiaohongshu-mcp
+go run . -headless=true
+```
+
+8. 配置定时任务
+
+可以使用内置 scheduler：
+
+```bash
+python -m catch_knowledge.cli schedule
+```
+
+也可以使用 crontab。生产环境更推荐 crontab 或 systemd timer，因为进程退出后更容易发现和恢复。
+
+## systemd 示例
+
+Web 服务示例：
+
+```ini
+[Unit]
+Description=Catch Knowledge Web
+After=network.target docker.service
+
+[Service]
+WorkingDirectory=/opt/catch_knowledge
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/catch_knowledge/.venv/bin/python -m catch_knowledge.cli web --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+QQ adapter 示例：
+
+```ini
+[Unit]
+Description=Catch Knowledge QQ Adapter
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/catch_knowledge
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/catch_knowledge/.venv/bin/python -m catch_knowledge.cli qq-adapter --host 127.0.0.1 --port 8090 --ingest-base-url http://127.0.0.1:8000 --napcat-api-base-url http://127.0.0.1:3000 --napcat-access-token 你的_NapCat_HTTP_Server_Token --webhook-secret 你的_Webhook_Token
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+定时抓取可以先用 crontab，不一定一开始就写 systemd timer。
+
+## 常用命令速查
 
 ```powershell
-python -m catch_knowledge.cli migrate-sqlite-to-db --sqlite-path ./data/catch_knowledge.db
-```
-
-## 火山 OCR 配置
-
-当前使用火山通用文字识别 `OCRNormal`：
-
-- Endpoint: `https://visual.volcengineapi.com`
-- Action: `OCRNormal`
-- Version: `2020-08-26`
-- Region: `cn-north-1`
-- Service: `cv`
-
-需要在 `.env` 里填写：
-
-```env
-OCR_ENABLED=true
-OCR_PROVIDER=volcengine
-OCR_DOWNLOAD_TIMEOUT_SECONDS=30
-OCR_MAX_IMAGES_PER_POST=9
-
-VOLCENGINE_OCR_AK=
-VOLCENGINE_OCR_SK=
-VOLCENGINE_OCR_ENDPOINT=https://visual.volcengineapi.com
-VOLCENGINE_OCR_REGION=cn-north-1
-VOLCENGINE_OCR_SERVICE=cv
-VOLCENGINE_OCR_MODE=default
-VOLCENGINE_OCR_FILTER_THRESH=80
-VOLCENGINE_OCR_HALF_TO_FULL=false
-```
-
-## LLM 配置
-
-```env
-OPENAI_API_KEY=
-OPENAI_BASE_URL=https://api.siliconflow.cn/v1
-OPENAI_MODEL=deepseek-ai/DeepSeek-V3
-LLM_RETRY_COUNT=2
-LLM_RETRY_BACKOFF_SECONDS=3
-```
-
-## 小红书模式
-
-先启动 MCP：
-
-```powershell
-cd E:\vibe_coding\catch_knowledge\xiaohongshu-mcp
-go run . -headless=false
-```
-
-再回项目根目录：
-
-```powershell
+python -m catch_knowledge.cli init-db
+python -m catch_knowledge.cli llm-check
 python -m catch_knowledge.cli xhs-mcp-status
 python -m catch_knowledge.cli xhs-search
 python -m catch_knowledge.cli run-once
+python -m catch_knowledge.cli schedule
+python -m catch_knowledge.cli web --host 127.0.0.1 --port 8000
+python -m catch_knowledge.cli qq-adapter --host 127.0.0.1 --port 8090 --ingest-base-url http://127.0.0.1:8000
+python -m catch_knowledge.cli manual-import --title "手动面经" --text "这里粘贴正文"
+python -m catch_knowledge.cli rerun-ocr
+python -m catch_knowledge.cli reanalyze-fallback
+python -m catch_knowledge.cli process-llm-retry-queue --limit 20
+python -m catch_knowledge.cli build-question-index
+python -m catch_knowledge.cli export-obsidian
+python -m catch_knowledge.cli sync-obsidian
 ```
 
-## 后续计划
+## 日常使用建议
 
-### 1. 数据层
+日常最常用的路径是：
 
-- 正式切到 PostgreSQL
-- 为后续统计、高频题聚合、Web 查询接口做准备
-- 当前本地开发已经支持通过 Docker Compose 启动 PostgreSQL
+1. 服务器定时跑 `run-once` 抓小红书面经。
+2. 平时看到零散面经，直接发给 QQ 号。
+3. 图片截图通过 QQ 上传，系统自动 OCR。
+4. Web 控制台只用来检查失败记录、手动重试、编辑或删除。
+5. Obsidian 只负责阅读、复习和少量人工修正。
+6. LLM fallback 由 `process-llm-retry-queue` 定时补跑。
 
-### 2. Obsidian 知识库
-
-- 将 `knowledge_base/` 作为 Obsidian Vault 打开
-- 使用公司页浏览每家公司面经
-- 使用知识点页查看相关面试题
-- 使用算法题页查看算法题频次和来源
-- 使用双链连接公司、知识点和单篇面经
-
-### 3. 知识库增强
-
-- 按公司分类
-- 按知识点聚合题目
-- 统计高频题
-- 统计算法题、场景题、项目题
-- 当前已经有第一版题目索引；后续可以在同知识点候选范围内加入 LLM 精修，进一步合并相似问法
-
-### 4. 服务器部署
-
-- 云服务器定时执行抓取
-- OCR 和 LLM 自动处理
-- 日志、失败重试和监控
-
-## 数据位置
-
-- SQLite 文件：
-  [catch_knowledge.db](e:\vibe_coding\catch_knowledge\data\catch_knowledge.db)
-
-- Markdown 知识库：
-  [knowledge_base](e:\vibe_coding\catch_knowledge\knowledge_base)
+如果 LLM 出现大量 `Connection error`，优先检查代理、网络和模型网关。这个项目的 LLM 客户端已经有重试、备用模型和后台补跑，但稳定网络仍然很重要。
