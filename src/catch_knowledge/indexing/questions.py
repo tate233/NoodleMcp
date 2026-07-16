@@ -4,7 +4,13 @@ import re
 
 from sqlalchemy.orm import Session
 
-from catch_knowledge.db.models import CanonicalQuestion, PostAnalysis, RawPost, TaxonomySuggestion
+from catch_knowledge.db.models import (
+    CanonicalQuestion,
+    CanonicalQuestionSource,
+    PostAnalysis,
+    RawPost,
+    TaxonomySuggestion,
+)
 from catch_knowledge.llm import LLMAnalyzer
 
 
@@ -45,6 +51,7 @@ class QuestionIndexBuilder:
         self.analyzer = analyzer
 
     def rebuild(self, session: Session) -> dict:
+        session.query(CanonicalQuestionSource).delete()
         session.query(CanonicalQuestion).delete()
         session.query(TaxonomySuggestion).delete()
         session.flush()
@@ -85,6 +92,7 @@ class QuestionIndexBuilder:
                 matched = self._find_match(session, kind, category, clean_question)
                 if matched:
                     self._add_occurrence(matched, raw_post, clean_question, subtopics)
+                    self._add_source_row(session, matched, raw_post, clean_question, subtopics)
                     stats["merged"] += 1
                     continue
 
@@ -104,6 +112,7 @@ class QuestionIndexBuilder:
                 )
                 session.add(created)
                 session.flush()
+                self._add_source_row(session, created, raw_post, clean_question, subtopics)
                 stats["created"] += 1
 
         stats["canonical_questions"] = session.query(CanonicalQuestion).count()
@@ -131,6 +140,7 @@ class QuestionIndexBuilder:
             "removed_occurrences": 0,
         }
 
+        self._ensure_source_rows(session)
         stats["removed_occurrences"] = self._remove_existing_occurrences(session, impacted_ids)
 
         rows = (
@@ -165,6 +175,7 @@ class QuestionIndexBuilder:
                 matched = self._find_match(session, kind, category, clean_question)
                 if matched:
                     self._add_occurrence(matched, raw_post, clean_question, subtopics)
+                    self._add_source_row(session, matched, raw_post, clean_question, subtopics)
                     stats["merged"] += 1
                     continue
 
@@ -184,6 +195,7 @@ class QuestionIndexBuilder:
                 )
                 session.add(created)
                 session.flush()
+                self._add_source_row(session, created, raw_post, clean_question, subtopics)
                 stats["created"] += 1
 
         stats["canonical_questions"] = session.query(CanonicalQuestion).count()
@@ -216,26 +228,25 @@ class QuestionIndexBuilder:
         return None
 
     def _remove_existing_occurrences(self, session: Session, impacted_ids: set[int]) -> int:
-        removed_occurrences = 0
+        source_rows = (
+            session.query(CanonicalQuestionSource)
+            .filter(CanonicalQuestionSource.raw_post_id.in_(list(impacted_ids)))
+            .all()
+        )
+        affected_canonical_ids = {row.canonical_question_id for row in source_rows}
+        removed_occurrences = len(source_rows)
 
-        for canonical in session.query(CanonicalQuestion).all():
-            source_ids = [raw_post_id for raw_post_id in (canonical.source_raw_post_ids or []) if raw_post_id not in impacted_ids]
-            variants = []
-            for variant in canonical.variants or []:
-                if not isinstance(variant, dict):
-                    continue
-                if variant.get("raw_post_id") in impacted_ids:
-                    removed_occurrences += 1
-                    continue
-                variants.append(variant)
+        for row in source_rows:
+            session.delete(row)
+        session.flush()
 
-            if not variants:
-                session.delete(canonical)
+        for canonical_id in sorted(affected_canonical_ids):
+            canonical = session.get(CanonicalQuestion, canonical_id)
+            if canonical is None:
                 continue
-
-            canonical.source_raw_post_ids = source_ids
-            canonical.variants = variants
-            canonical.frequency = len(variants)
+            self._refresh_canonical_from_sources(session, canonical)
+            if canonical.frequency <= 0:
+                session.delete(canonical)
 
         for suggestion in session.query(TaxonomySuggestion).all():
             source_ids = [raw_post_id for raw_post_id in (suggestion.source_raw_post_ids or []) if raw_post_id not in impacted_ids]
@@ -258,6 +269,68 @@ class QuestionIndexBuilder:
         canonical.source_raw_post_ids = source_ids
         canonical.variants = variants
         canonical.frequency = len(variants)
+
+    @staticmethod
+    def _add_source_row(
+        session: Session,
+        canonical: CanonicalQuestion,
+        raw_post: RawPost,
+        question: str,
+        subtopics: list[str],
+    ) -> None:
+        session.add(
+            CanonicalQuestionSource(
+                canonical_question_id=canonical.id,
+                raw_post_id=raw_post.id,
+                question=question,
+                subtopics=subtopics,
+            )
+        )
+
+    def _ensure_source_rows(self, session: Session) -> None:
+        if session.query(CanonicalQuestionSource.id).first() is not None:
+            return
+
+        for canonical in session.query(CanonicalQuestion).all():
+            for variant in canonical.variants or []:
+                if not isinstance(variant, dict):
+                    continue
+                raw_post_id = variant.get("raw_post_id")
+                question = self._clean(variant.get("question") or canonical.canonical_text)
+                if not raw_post_id or not question:
+                    continue
+                session.add(
+                    CanonicalQuestionSource(
+                        canonical_question_id=canonical.id,
+                        raw_post_id=int(raw_post_id),
+                        question=question,
+                        subtopics=[
+                            str(item).strip()
+                            for item in (variant.get("subtopics") or [])
+                            if str(item).strip()
+                        ],
+                    )
+                )
+        session.flush()
+
+    @staticmethod
+    def _refresh_canonical_from_sources(session: Session, canonical: CanonicalQuestion) -> None:
+        source_rows = (
+            session.query(CanonicalQuestionSource)
+            .filter(CanonicalQuestionSource.canonical_question_id == canonical.id)
+            .order_by(CanonicalQuestionSource.id.asc())
+            .all()
+        )
+        canonical.source_raw_post_ids = sorted({row.raw_post_id for row in source_rows})
+        canonical.variants = [
+            {
+                "raw_post_id": row.raw_post_id,
+                "question": row.question,
+                "subtopics": row.subtopics or [],
+            }
+            for row in source_rows
+        ]
+        canonical.frequency = len(source_rows)
 
     @staticmethod
     def _record_suggestion(session: Session, suggested_name: str, raw_post: RawPost, question: str) -> None:

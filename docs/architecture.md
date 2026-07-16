@@ -121,6 +121,8 @@ OCR_PROVIDER=volcengine
 
 它使用固定一级 taxonomy，避免知识库目录被 LLM 随机命名污染。细粒度考点会保存在 `variants[].subtopics` 里。
 
+`canonical_question_sources` 是题目索引的反向来源表，记录每个 canonical question 来自哪条 `raw_posts`、原始题目文本和细考点。删除或重分析单条面经时，系统会先按 `raw_post_id` 命中这张表，再精准刷新对应 canonical question，避免遍历所有 `canonical_questions`。
+
 当前重点分类包括：
 
 - 后端基础：MySQL、Redis、消息队列、分布式系统、Java、Spring、网络、操作系统、系统设计

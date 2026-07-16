@@ -62,6 +62,7 @@ def _sync_postgres_sequences(engine) -> None:
         "post_analysis",
         "kb_documents",
         "canonical_questions",
+        "canonical_question_sources",
         "taxonomy_suggestions",
     ]
 

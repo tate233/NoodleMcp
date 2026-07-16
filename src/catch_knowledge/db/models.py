@@ -89,6 +89,20 @@ class CanonicalQuestion(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class CanonicalQuestionSource(Base):
+    __tablename__ = "canonical_question_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    canonical_question_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_questions.id", ondelete="CASCADE"),
+        index=True,
+    )
+    raw_post_id: Mapped[int] = mapped_column(Integer, index=True)
+    question: Mapped[str] = mapped_column(Text)
+    subtopics: Mapped[Optional[List[str]]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class TaxonomySuggestion(Base):
     __tablename__ = "taxonomy_suggestions"
     __table_args__ = (

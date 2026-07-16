@@ -1,11 +1,12 @@
 from .base import Base
 from .migrate import migrate_sqlite_to_current_db
-from .models import CanonicalQuestion, KBDocument, PostAnalysis, RawPost, TaxonomySuggestion
+from .models import CanonicalQuestion, CanonicalQuestionSource, KBDocument, PostAnalysis, RawPost, TaxonomySuggestion
 from .session import create_session_factory, create_tables
 
 __all__ = [
     "Base",
     "CanonicalQuestion",
+    "CanonicalQuestionSource",
     "KBDocument",
     "PostAnalysis",
     "RawPost",

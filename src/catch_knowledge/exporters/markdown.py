@@ -10,7 +10,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from catch_knowledge.config import Settings
-from catch_knowledge.db.models import CanonicalQuestion, KBDocument, PostAnalysis, RawPost
+from catch_knowledge.db.models import CanonicalQuestion, CanonicalQuestionSource, KBDocument, PostAnalysis, RawPost
 
 
 class MarkdownExporter:
@@ -627,15 +627,32 @@ class MarkdownExporter:
 
     @staticmethod
     def _canonical_points_for_post(session: Session, raw_post_id: int) -> set[str]:
-        points = set()
+        rows = (
+            session.query(CanonicalQuestion.knowledge_point)
+            .join(CanonicalQuestionSource, CanonicalQuestionSource.canonical_question_id == CanonicalQuestion.id)
+            .filter(CanonicalQuestion.kind == "interview", CanonicalQuestionSource.raw_post_id == raw_post_id)
+            .all()
+        )
+        points = {row[0] for row in rows}
+        if points:
+            return points
+
         for row in session.query(CanonicalQuestion).filter(CanonicalQuestion.kind == "interview").all():
-            source_ids = row.source_raw_post_ids or []
-            if raw_post_id in source_ids:
+            if raw_post_id in (row.source_raw_post_ids or []):
                 points.add(row.knowledge_point)
         return points
 
     @staticmethod
     def _has_algorithm_entry_for_post(session: Session, raw_post_id: int) -> bool:
+        exists = (
+            session.query(CanonicalQuestionSource.id)
+            .join(CanonicalQuestion, CanonicalQuestion.id == CanonicalQuestionSource.canonical_question_id)
+            .filter(CanonicalQuestion.kind == "algorithm", CanonicalQuestionSource.raw_post_id == raw_post_id)
+            .first()
+        )
+        if exists:
+            return True
+
         for row in session.query(CanonicalQuestion).filter(CanonicalQuestion.kind == "algorithm").all():
             if raw_post_id in (row.source_raw_post_ids or []):
                 return True
