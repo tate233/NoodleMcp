@@ -65,6 +65,7 @@ def run_pipeline(settings: Settings) -> dict:
         stats["canonical_questions"] = sync_stats.get("canonical_questions", 0)
         stats["knowledge_point_pages"] = sync_stats.get("knowledge_point_pages", 0)
         stats["algorithm_pages"] = sync_stats.get("algorithm_pages", 0)
+        stats["agent_pages"] = sync_stats.get("agent_pages", 0)
         stats["company_pages"] = sync_stats.get("company_pages", 0)
         stats["exported"] = sync_stats.get("exported", stats.get("exported", 0))
 
@@ -228,6 +229,7 @@ def sync_incremental_outputs(settings: Settings, raw_post_ids: list[int]) -> dic
             "canonical_questions": index_stats.get("canonical_questions", 0),
             "knowledge_point_pages": export_stats.get("knowledge_point_pages", 0),
             "algorithm_pages": export_stats.get("algorithm_pages", 0),
+            "agent_pages": export_stats.get("agent_pages", 0),
             "company_pages": export_stats.get("company_pages", 0),
             "exported": export_stats.get("note_pages", 0),
         }
@@ -296,6 +298,7 @@ def delete_post_incremental(settings: Settings, raw_post_id: int) -> dict:
         "canonical_questions": index_stats.get("canonical_questions", 0),
         "knowledge_point_pages": export_stats.get("knowledge_point_pages", 0),
         "algorithm_pages": export_stats.get("algorithm_pages", 0),
+        "agent_pages": export_stats.get("agent_pages", 0),
         "company_pages": export_stats.get("company_pages", 0),
         "exported": export_stats.get("note_pages", 0),
     }
@@ -390,6 +393,7 @@ def import_manual_note(
         stats["canonical_questions"] = sync_stats.get("canonical_questions", 0)
         stats["knowledge_point_pages"] = sync_stats.get("knowledge_point_pages", 0)
         stats["algorithm_pages"] = sync_stats.get("algorithm_pages", 0)
+        stats["agent_pages"] = sync_stats.get("agent_pages", 0)
         stats["company_pages"] = sync_stats.get("company_pages", 0)
         stats["exported"] = sync_stats.get("exported", 0)
 

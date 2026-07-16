@@ -14,6 +14,8 @@ from catch_knowledge.db.models import CanonicalQuestion, KBDocument, PostAnalysi
 
 
 class MarkdownExporter:
+    agent_knowledge_points = {"Agent开发", "AI/RAG", "LLM应用工程"}
+
     def __init__(self, settings: Settings):
         self.settings = settings
 
@@ -42,7 +44,7 @@ class MarkdownExporter:
             .all()
         )
 
-        stats = {"company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+        stats = {"company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "agent_pages": 0, "index_pages": 0}
         for raw_post, analysis in rows:
             self.export(raw_post, analysis)
         self._export_company_pages(rows)
@@ -57,17 +59,33 @@ class MarkdownExporter:
             algorithms = self._export_algorithm_pages(rows)
         stats["knowledge_point_pages"] = len(knowledge_points)
         stats["algorithm_pages"] = len(algorithms)
+        agents = self._export_agent_pages(session)
+        stats["agent_pages"] = len(agents)
 
-        self._export_home_index(rows, knowledge_points, algorithms)
+        self._export_home_index(rows, knowledge_points, algorithms, agents)
         stats["index_pages"] = 1
         return stats
 
     def sync_posts(self, session: Session, raw_post_ids: List[int]) -> dict:
         if not raw_post_ids:
-            return {"note_pages": 0, "company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+            return {
+                "note_pages": 0,
+                "company_pages": 0,
+                "knowledge_point_pages": 0,
+                "algorithm_pages": 0,
+                "agent_pages": 0,
+                "index_pages": 0,
+            }
 
         impacted_ids = {int(raw_post_id) for raw_post_id in raw_post_ids}
-        stats = {"note_pages": 0, "company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+        stats = {
+            "note_pages": 0,
+            "company_pages": 0,
+            "knowledge_point_pages": 0,
+            "algorithm_pages": 0,
+            "agent_pages": 0,
+            "index_pages": 0,
+        }
         affected_companies = set()
         affected_points = set()
         affected_algorithm = False
@@ -140,6 +158,11 @@ class MarkdownExporter:
             self._sync_algorithm_page(session)
             stats["algorithm_pages"] = 1
 
+        agents = {}
+        if any(self._is_agent_point(point) for point in affected_points):
+            agents = self._sync_agent_pages(session)
+            stats["agent_pages"] = len(agents)
+
         all_rows = (
             session.query(RawPost, PostAnalysis)
             .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
@@ -152,7 +175,9 @@ class MarkdownExporter:
         )
         knowledge_points = self._current_knowledge_point_counts(session)
         algorithms = self._current_algorithm_counts(session)
-        self._export_home_index(all_rows, knowledge_points, algorithms)
+        if not agents:
+            agents = self._current_agent_counts(session)
+        self._export_home_index(all_rows, knowledge_points, algorithms, agents)
         stats["index_pages"] = 1
 
         return stats
@@ -168,9 +193,23 @@ class MarkdownExporter:
     ) -> dict:
         impacted_ids = {int(raw_post_id) for raw_post_id in raw_post_ids}
         if not impacted_ids:
-            return {"note_pages": 0, "company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+            return {
+                "note_pages": 0,
+                "company_pages": 0,
+                "knowledge_point_pages": 0,
+                "algorithm_pages": 0,
+                "agent_pages": 0,
+                "index_pages": 0,
+            }
 
-        stats = {"note_pages": 0, "company_pages": 0, "knowledge_point_pages": 0, "algorithm_pages": 0, "index_pages": 0}
+        stats = {
+            "note_pages": 0,
+            "company_pages": 0,
+            "knowledge_point_pages": 0,
+            "algorithm_pages": 0,
+            "agent_pages": 0,
+            "index_pages": 0,
+        }
         company_targets = {self._clean_name(company) for company in (affected_companies or []) if self._clean_name(company)}
         point_targets = {self._clean_name(point) for point in (affected_points or []) if self._clean_name(point)}
         algorithm_target = bool(affected_algorithm)
@@ -196,6 +235,11 @@ class MarkdownExporter:
             self._sync_algorithm_page(session)
             stats["algorithm_pages"] = 1
 
+        agents = {}
+        if any(self._is_agent_point(point) for point in point_targets):
+            agents = self._sync_agent_pages(session)
+            stats["agent_pages"] = len(agents)
+
         all_rows = (
             session.query(RawPost, PostAnalysis)
             .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
@@ -208,14 +252,16 @@ class MarkdownExporter:
         )
         knowledge_points = self._current_knowledge_point_counts(session)
         algorithms = self._current_algorithm_counts(session)
-        self._export_home_index(all_rows, knowledge_points, algorithms)
+        if not agents:
+            agents = self._current_agent_counts(session)
+        self._export_home_index(all_rows, knowledge_points, algorithms, agents)
         stats["index_pages"] = 1
         return stats
 
     def _clear_generated_vault(self) -> None:
         base = self.settings.knowledge_base_dir.resolve()
         base.mkdir(parents=True, exist_ok=True)
-        generated_dirs = ["面经", "公司", "面试题", "算法题"]
+        generated_dirs = ["面经", "公司", "面试题", "算法题", "Agent"]
         for dirname in generated_dirs:
             path = (base / dirname).resolve()
             if path == base or base not in path.parents:
@@ -230,7 +276,7 @@ class MarkdownExporter:
             home.unlink()
 
     def _sync_company_page(self, session: Session, company: str) -> bool:
-        company = self._clean_name(company) or "鏈煡鍏徃"
+        company = self._clean_name(company) or "未知公司"
         rows = (
             session.query(RawPost, PostAnalysis)
             .join(PostAnalysis, PostAnalysis.raw_post_id == RawPost.id)
@@ -242,16 +288,16 @@ class MarkdownExporter:
             .order_by(RawPost.id.asc())
             .all()
         )
-        path = self.settings.knowledge_base_dir / "鍏徃" / f"{self._slugify(company)}.md"
+        path = self.settings.knowledge_base_dir / "公司" / f"{self._slugify(company)}.md"
         if not rows:
             self._unlink_file(path)
             return False
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [f"# {company}", "", "## 闈㈢粡璁板綍"]
+        lines = [f"# {company}", "", "## 面经记录"]
         for raw_post, analysis in rows:
             note_title = self._build_title(raw_post, analysis)
-            rel_link = self._obsidian_link("闈㈢粡", company, note_title, raw_post, analysis)
+            rel_link = self._obsidian_link("面经", company, note_title, raw_post, analysis)
             lines.append(f"- {rel_link}")
         lines.append("")
         path.write_text("\n".join(lines), encoding="utf-8")
@@ -480,6 +526,53 @@ class MarkdownExporter:
 
         return {item.canonical_text: item.frequency for item in rows}
 
+    def _export_agent_pages(self, session: Session) -> Dict[str, int]:
+        rows = (
+            session.query(CanonicalQuestion)
+            .filter(CanonicalQuestion.kind == "interview")
+            .order_by(CanonicalQuestion.knowledge_point.asc(), CanonicalQuestion.frequency.desc())
+            .all()
+        )
+        grouped: Dict[str, List[CanonicalQuestion]] = defaultdict(list)
+        for row in rows:
+            if self._is_agent_point(row.knowledge_point):
+                grouped[row.knowledge_point].append(row)
+
+        base = self.settings.knowledge_base_dir / "Agent"
+        if not grouped:
+            if base.exists():
+                shutil.rmtree(base)
+            return {}
+
+        base.mkdir(parents=True, exist_ok=True)
+        counts = {point: sum(item.frequency for item in items) for point, items in grouped.items()}
+
+        index_lines = ["# Agent", "", "## 主题"]
+        for point, count in sorted(counts.items(), key=lambda item: item[1], reverse=True):
+            index_lines.append(f"- [[Agent/{self._slugify(point)}|{point}]]：{count}")
+        index_lines.append("")
+        (base / "Agent.md").write_text("\n".join(index_lines), encoding="utf-8")
+
+        for point, items in grouped.items():
+            lines = [f"# {point}", "", f"题目数：{len(items)}", "", "## 题目"]
+            for item in items:
+                lines.append(f"- {item.canonical_text}  频次：{item.frequency}")
+                subtopics = self._canonical_subtopics(item)
+                if subtopics:
+                    lines.append(f"  - 细考点：{', '.join(subtopics)}")
+                for source in self._source_links(session, item.source_raw_post_ids or []):
+                    lines.append(f"  - 来源：{source}")
+            lines.append("")
+            (base / f"{self._slugify(point)}.md").write_text("\n".join(lines), encoding="utf-8")
+
+        return counts
+
+    def _sync_agent_pages(self, session: Session) -> Dict[str, int]:
+        base = self.settings.knowledge_base_dir / "Agent"
+        if base.exists():
+            shutil.rmtree(base)
+        return self._export_agent_pages(session)
+
     def _current_knowledge_point_counts(self, session: Session) -> Dict[str, int]:
         rows = (
             session.query(CanonicalQuestion)
@@ -499,6 +592,18 @@ class MarkdownExporter:
         )
         return {row.canonical_text: int(row.frequency or 0) for row in rows}
 
+    def _current_agent_counts(self, session: Session) -> Dict[str, int]:
+        rows = (
+            session.query(CanonicalQuestion)
+            .filter(CanonicalQuestion.kind == "interview")
+            .all()
+        )
+        grouped: Dict[str, int] = defaultdict(int)
+        for row in rows:
+            if self._is_agent_point(row.knowledge_point):
+                grouped[row.knowledge_point] += int(row.frequency or 0)
+        return dict(grouped)
+
     @staticmethod
     def _unlink_file(path: Path) -> None:
         try:
@@ -512,10 +617,10 @@ class MarkdownExporter:
         if not markdown_path:
             return None
         parts = Path(markdown_path).parts
-        if "闈㈢粡" not in parts:
+        if "面经" not in parts:
             return None
         try:
-            index = parts.index("闈㈢粡")
+            index = parts.index("面经")
             return parts[index + 1]
         except (ValueError, IndexError):
             return None
@@ -536,17 +641,35 @@ class MarkdownExporter:
                 return True
         return False
 
-    def _export_home_index(self, rows, knowledge_points: Dict[str, int], algorithms: Dict[str, int]) -> None:
+    def _export_home_index(
+        self,
+        rows,
+        knowledge_points: Dict[str, int],
+        algorithms: Dict[str, int],
+        agents: Dict[str, int] | None = None,
+    ) -> None:
         base = self.settings.knowledge_base_dir
+        agents = agents or {}
         lines = [
             "# 面经知识库",
             "",
             f"- 面经数量：{len(rows)}",
             f"- 知识点数量：{len(knowledge_points)}",
             f"- 算法题数量：{len(algorithms)}",
+            f"- Agent 主题数量：{len(agents)}",
+            "",
+            "## Agent / AI 应用开发",
+        ]
+        if agents:
+            for point, count in sorted(agents.items(), key=lambda item: item[1], reverse=True):
+                lines.append(f"- [[Agent/{self._slugify(point)}|{point}]]：{count}")
+        else:
+            lines.append("- 暂无 Agent 相关题目")
+
+        lines.extend([
             "",
             "## 高频知识点",
-        ]
+        ])
         for point, count in sorted(knowledge_points.items(), key=lambda item: item[1], reverse=True)[:30]:
             lines.append(f"- [[{point}]]：{count}")
 
@@ -568,6 +691,7 @@ class MarkdownExporter:
 
     @staticmethod
     def _slugify(value: str) -> str:
+        value = str(value or "").replace("/", "_").replace("\\", "_")
         value = re.sub(r"[^\w\u4e00-\u9fff\- ]+", "", value).strip()
         value = re.sub(r"\s+", "_", value)
         return value[:120] or "document"
@@ -612,6 +736,17 @@ class MarkdownExporter:
                 if text:
                     subtopics.append(text)
         return sorted(set(subtopics))
+
+    @classmethod
+    def _is_agent_point(cls, point: str) -> bool:
+        text = str(point or "").strip()
+        normalized = text.lower()
+        if not normalized:
+            return False
+        if text in cls.agent_knowledge_points:
+            return True
+        keywords = ["agent", "智能体", "rag", "llm", "大模型", "ai应用", "ai 应用", "应用开发"]
+        return any(keyword in normalized for keyword in keywords)
 
     @staticmethod
     def _extract_algorithm_questions(questions: List[str]) -> List[str]:

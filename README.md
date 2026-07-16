@@ -163,7 +163,7 @@ VOLCENGINE_OCR_HALF_TO_FULL=false
 ```env
 SOURCE_PLATFORM=xiaohongshu_mcp
 XHS_MCP_BASE_URL=http://127.0.0.1:18060
-XHS_KEYWORDS=后端 面经
+XHS_KEYWORDS=后端 面经,Agent 面经,大模型应用开发 面经,AI应用开发 面经
 XHS_SEARCH_SORT_BY=最新
 XHS_SEARCH_PUBLISH_TIME=一天内
 XHS_MAX_RESULTS_PER_KEYWORD=10
@@ -410,6 +410,11 @@ knowledge_base/
     知识点.md
   算法题/
     算法题.md
+  Agent/
+    Agent.md
+    Agent开发.md
+    AI_RAG.md
+    LLM应用工程.md
   面经知识库.md
 ```
 
@@ -426,7 +431,7 @@ python -m catch_knowledge.cli export-obsidian
 python -m catch_knowledge.cli sync-obsidian
 ```
 
-注意：`sync-obsidian` 只同步单篇面经，不同步公司页、面试题页、算法题页这些自动生成的聚合页。
+注意：`sync-obsidian` 只同步单篇面经，不同步公司页、面试题页、算法题页、Agent 页这些自动生成的聚合页。
 
 ## LLM 与 OCR 补跑
 
